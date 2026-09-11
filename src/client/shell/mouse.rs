@@ -1726,6 +1726,20 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                let agent_pane_id = (!self.sidebar_collapsed)
+                    .then(|| {
+                        self.hits
+                            .agents
+                            .iter()
+                            .find(|(rect, _)| super::contains(*rect, point))
+                            .map(|(_, pane_id)| pane_id.clone())
+                    })
+                    .flatten();
+                if let Some(pane_id) = agent_pane_id {
+                    self.open_agent_context_menu(pane_id, mouse.column, mouse.row);
+                    outcome.repaint = true;
+                    return;
+                }
                 let tab_id = self
                     .hits
                     .tabs
@@ -1978,10 +1992,22 @@ impl ClientShellState {
                             if !self.collapsed_groups.remove(key) {
                                 self.collapsed_groups.insert(key.clone());
                             }
+                            self.config.collapsed_groups = self.collapsed_groups.clone();
                             outcome.repaint = true;
                             self.persist_chrome_preferences(outcome);
                             return;
                         }
+                    }
+                }
+                for (rect, key) in &self.hits.agent_group_toggles {
+                    if super::contains(*rect, point) {
+                        if !self.collapsed_groups.remove(key) {
+                            self.collapsed_groups.insert(key.clone());
+                        }
+                        self.config.collapsed_groups = self.collapsed_groups.clone();
+                        outcome.repaint = true;
+                        self.persist_chrome_preferences(outcome);
+                        return;
                     }
                 }
                 let workspace_press = self
