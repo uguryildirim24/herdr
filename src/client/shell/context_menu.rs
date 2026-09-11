@@ -75,6 +75,15 @@ impl ClientContextMenuOverlay {
                 ]);
                 items
             }
+            ClientContextMenuTarget::Agent {
+                has_children: true,
+                collapsed,
+                ..
+            } => vec![item(
+                if *collapsed { "Expand" } else { "Collapse" },
+                Action::ToggleGroup,
+            )],
+            ClientContextMenuTarget::Agent { .. } => Vec::new(),
         }
     }
 }
@@ -167,6 +176,41 @@ impl ClientShellState {
         }));
     }
 
+    pub(super) fn open_agent_context_menu(&mut self, pane_id: String, x: u16, y: u16) {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let key = super::agent_tree::agent_group_key(None, &pane_id);
+        let has_children = self.hits.agent_group_toggles.iter().any(|(_, k)| k == &key)
+            || snapshot.agents.iter().any(|agent| {
+                agent.workspace_id
+                    == snapshot
+                        .agents
+                        .iter()
+                        .find(|p| p.pane_id == pane_id)
+                        .map(|p| p.workspace_id.as_str())
+                        .unwrap_or("")
+                    && agent
+                        .tokens
+                        .iter()
+                        .any(|(k, v)| k == "parent" && v == &pane_id)
+            });
+        if !has_children {
+            return;
+        }
+        let collapsed = self.collapsed_groups.contains(&key);
+        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Agent {
+                pane_id,
+                has_children: true,
+                collapsed,
+            },
+            x,
+            y,
+            highlighted: 0,
+        }));
+    }
+
     pub(super) fn move_context_menu_selection(&mut self, delta: isize) {
         let Some(ClientShellOverlay::ContextMenu(menu)) = self.overlay.as_mut() else {
             return;
@@ -213,8 +257,27 @@ impl ClientShellState {
                 action,
                 outcome,
             ),
+            ClientContextMenuTarget::Agent { pane_id, .. } => {
+                self.activate_agent_context_action(pane_id, action, outcome)
+            }
         }
         outcome.repaint = true;
+    }
+
+    fn activate_agent_context_action(
+        &mut self,
+        pane_id: String,
+        action: ClientContextMenuAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        if action == ClientContextMenuAction::ToggleGroup {
+            let key = super::agent_tree::agent_group_key(None, &pane_id);
+            if !self.collapsed_groups.remove(&key) {
+                self.collapsed_groups.insert(key);
+            }
+            self.config.collapsed_groups = self.collapsed_groups.clone();
+            self.persist_chrome_preferences(outcome);
+        }
     }
 
     fn activate_workspace_context_action(
