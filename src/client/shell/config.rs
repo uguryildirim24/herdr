@@ -154,8 +154,7 @@ impl ClientShellConfig {
             switch_ascii_input_source_in_prefix: config
                 .experimental
                 .switch_ascii_input_source_in_prefix,
-            agent_parent_nesting: false, // LANE-W1 fallback until experimental.agent_parent_nesting lands
-            collapsed_groups: HashSet::new(),
+            agent_parent_nesting: config.experimental.agent_parent_nesting,
             local_config_path: crate::config::config_path(),
             preferences_path: None,
             preferences: preferences::ClientChromePreferences::default(),
@@ -198,7 +197,6 @@ impl ClientShellConfig {
 
     pub(super) fn with_preferences_path(mut self, path: std::path::PathBuf) -> Self {
         self.preferences = preferences::load(&path).unwrap_or_default();
-        self.collapsed_groups = self.preferences.collapsed_groups.iter().cloned().collect();
         self.preferences_path = Some(path);
         self
     }
@@ -355,7 +353,7 @@ impl ClientShellConfig {
         if !invalid_section("experimental") {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
-            // LANE-W1: self.agent_parent_nesting = config.experimental.agent_parent_nesting;
+            self.agent_parent_nesting = config.experimental.agent_parent_nesting;
         }
 
         diagnostics

@@ -1803,9 +1803,10 @@ impl ClientShellState {
                     })
                     .flatten();
                 if let Some(pane_id) = agent_pane_id {
-                    self.open_agent_context_menu(pane_id, mouse.column, mouse.row);
-                    outcome.repaint = true;
-                    return;
+                    if self.open_agent_context_menu(&pane_id, mouse.column, mouse.row) {
+                        outcome.repaint = true;
+                        return;
+                    }
                 }
                 let tab_id = self
                     .hits
@@ -2063,12 +2064,11 @@ impl ClientShellState {
                     self.persist_chrome_preferences(outcome);
                     return;
                 }
-                for (rect, key) in &self.hits.agent_group_toggles {
+                for (rect, _, key) in &self.hits.agent_group_toggles {
                     if super::contains(*rect, point) {
                         if !self.collapsed_groups.remove(key) {
                             self.collapsed_groups.insert(key.clone());
                         }
-                        self.config.collapsed_groups = self.collapsed_groups.clone();
                         outcome.repaint = true;
                         self.persist_chrome_preferences(outcome);
                         return;

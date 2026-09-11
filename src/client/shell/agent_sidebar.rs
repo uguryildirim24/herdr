@@ -16,23 +16,26 @@ pub(super) struct AgentRow {
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
     pub(super) depth: usize,
-    pub(super) child_count: usize,
     pub(super) collapsed: bool,
     pub(super) hidden_descendants: usize,
     pub(super) worst_hidden_status: Option<crate::api::schema::AgentStatus>,
     pub(super) is_last_child: bool,
+    /// `collapsed_groups` key for this row; `Some` only when the row has children.
+    pub(super) group_key: Option<String>,
 }
 
+/// Pane ids in rendered order. `collapsed_groups` is `None` for surfaces that render the
+/// agent list flat regardless of the nesting flag.
 pub(super) fn visible_agent_pane_ids(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
-    collapsed_groups: &HashSet<String>,
+    collapsed_groups: Option<&HashSet<String>>,
     machine: Option<&str>,
 ) -> Vec<String> {
     let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
-    if !config.agent_parent_nesting {
+    let Some(collapsed_groups) = collapsed_groups.filter(|_| config.agent_parent_nesting) else {
         return ordered;
-    }
+    };
     super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine)
         .into_iter()
         .map(|row| row.pane_id)
@@ -76,6 +79,7 @@ pub(super) fn render_agent_panel(
     area: Rect,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
 ) {
@@ -89,7 +93,7 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let rows = agent_rows(snapshot, config, None);
+    let rows = agent_rows(snapshot, config, Some(collapsed_groups), None);
     render_agent_list(
         buffer,
         area,
@@ -262,11 +266,11 @@ pub(super) fn render_agent_list<T>(
 fn build_agent_row(
     pane_id: &str,
     depth: usize,
-    child_count: usize,
     collapsed: bool,
     hidden_descendants: usize,
     worst_hidden_status: Option<crate::api::schema::AgentStatus>,
     is_last_child: bool,
+    group_key: Option<String>,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     machine: Option<&str>,
@@ -336,33 +340,35 @@ fn build_agent_row(
         focused: agent.focused,
         rows,
         depth,
-        child_count,
         collapsed,
         hidden_descendants,
         worst_hidden_status,
         is_last_child,
+        group_key,
     })
 }
 
+/// Rows in rendered order. `collapsed_groups` is `None` for surfaces that render the agent
+/// list flat regardless of the nesting flag.
 pub(super) fn agent_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
+    collapsed_groups: Option<&HashSet<String>>,
     machine: Option<&str>,
 ) -> Vec<AgentRow> {
     let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
-    if !config.agent_parent_nesting {
+    let Some(collapsed_groups) = collapsed_groups.filter(|_| config.agent_parent_nesting) else {
         return ordered
             .into_iter()
             .filter_map(|pane_id| {
                 build_agent_row(
-                    &pane_id, 0, 0, false, 0, None, false, snapshot, config, machine,
+                    &pane_id, 0, false, 0, None, false, None, snapshot, config, machine,
                 )
             })
             .collect();
-    }
+    };
 
-    let tree_rows =
-        super::agent_tree::nest_agents(&ordered, snapshot, &config.collapsed_groups, machine);
+    let tree_rows = super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine);
     let mut rows = Vec::with_capacity(tree_rows.len());
     for (i, tree_row) in tree_rows.iter().enumerate() {
         let is_last_child = if tree_row.depth == 0 {
@@ -380,14 +386,16 @@ pub(super) fn agent_rows(
             }
             last
         };
+        let group_key = (tree_row.child_count > 0)
+            .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
         if let Some(row) = build_agent_row(
             &tree_row.pane_id,
             tree_row.depth,
-            tree_row.child_count,
             tree_row.collapsed,
             tree_row.hidden_descendants,
             tree_row.worst_hidden_status,
             is_last_child,
+            group_key,
             snapshot,
             config,
             machine,
@@ -405,7 +413,7 @@ pub(super) fn agent_row(
     machine: Option<&str>,
 ) -> Option<AgentRow> {
     build_agent_row(
-        pane_id, 0, 0, false, 0, None, false, snapshot, config, machine,
+        pane_id, 0, false, 0, None, false, None, snapshot, config, machine,
     )
 }
 
@@ -414,7 +422,7 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
-) -> Option<(Rect, String)> {
+) -> Option<(Rect, String, String)> {
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -448,8 +456,7 @@ pub(super) fn render_agent_row(
     let clamped_depth = row.depth.min(3);
     let prefix_style = Style::default().fg(palette.overlay0);
 
-    let toggle_info = if row.child_count > 0 {
-        let key = super::agent_tree::agent_group_key(None, &row.pane_id);
+    let toggle_info = if let Some(key) = row.group_key.clone() {
         if row.collapsed {
             let count_str = format!("{}", row.hidden_descendants);
             let worst_status = row.worst_hidden_status.unwrap_or(row.status);
@@ -564,7 +571,7 @@ pub(super) fn render_agent_row(
                 Style::default().fg(palette.accent),
             );
         }
-        Some((toggle_rect, key))
+        Some((toggle_rect, row.pane_id.clone(), key))
     } else {
         None
     }

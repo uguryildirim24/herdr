@@ -40,7 +40,7 @@ fn mouse_click_on_agent_chevron_toggles_collapsed_groups_and_click_elsewhere_foc
     state
         .hits
         .agent_group_toggles
-        .push((Rect::new(29, 5, 1, 1), "agent:p1".into()));
+        .push((Rect::new(29, 5, 1, 1), "p1".into(), "agent:p1".into()));
 
     // 1. Click on chevron at (29, 5): should toggle collapsed_groups without focusing pane
     let chevron_click = state.handle_raw_events(vec![
@@ -58,7 +58,6 @@ fn mouse_click_on_agent_chevron_toggles_collapsed_groups_and_click_elsewhere_foc
         }),
     ]);
     assert!(state.collapsed_groups.contains("agent:p1"));
-    assert!(state.config.collapsed_groups.contains("agent:p1"));
     assert!(chevron_click.actions.is_empty());
 
     // 2. Click chevron again at (29, 5): should expand (remove from collapsed_groups)
@@ -77,7 +76,6 @@ fn mouse_click_on_agent_chevron_toggles_collapsed_groups_and_click_elsewhere_foc
         }),
     ]);
     assert!(!state.collapsed_groups.contains("agent:p1"));
-    assert!(!state.config.collapsed_groups.contains("agent:p1"));
     assert!(chevron_unclick.actions.is_empty());
 
     // 3. Click elsewhere on the agent row at (10, 5): should focus pane
