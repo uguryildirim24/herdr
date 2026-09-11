@@ -877,22 +877,22 @@ fn agent_set_parent(args: &[String]) -> std::io::Result<i32> {
         Some(super::normalize_pane_id(value))
     };
 
-    let target_pane_id = if is_valid_pane_id(target) {
-        super::normalize_pane_id(target)
-    } else {
-        let response = resolve_agent_target(target, "cli:agent:set-parent")?;
-        if response.get("error").is_some() {
-            return super::print_response(&response);
-        }
-        let Some(pane_id) = response["result"]["agent"]["pane_id"].as_str() else {
-            return super::print_response(&cli_agent_error(
-                "cli:agent:set-parent",
-                "agent_not_found",
-                format!("could not determine pane id for agent target {target}"),
-            ));
-        };
-        pane_id.to_string()
+    // Always resolve through agent.get, the way every other `herdr agent` command hands its
+    // target to the server. A pane id and an agent name are not distinguishable here: an agent
+    // named `worker-1` matches the `<workspace>-<pane number>` pane id shape, so a local
+    // fast path would silently report metadata on a pane that does not exist.
+    let response = resolve_agent_target(target, "cli:agent:set-parent")?;
+    if response.get("error").is_some() {
+        return super::print_response(&response);
+    }
+    let Some(target_pane_id) = response["result"]["agent"]["pane_id"].as_str() else {
+        return super::print_response(&cli_agent_error(
+            "cli:agent:set-parent",
+            "agent_not_found",
+            format!("could not determine pane id for agent target {target}"),
+        ));
     };
+    let target_pane_id = target_pane_id.to_string();
 
     let mut tokens = std::collections::HashMap::new();
     tokens.insert("parent".to_string(), parent_token);
@@ -1168,5 +1168,17 @@ mod tests {
             agent_set_parent(&args(&["w1:p2", "not-a-pane"])).unwrap(),
             2
         );
+        assert_eq!(
+            agent_set_parent(&args(&["w1:p2", "w1:p1", "--clear"])).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn agent_names_can_look_like_pane_ids() {
+        // `set-parent` must not take a local fast path on these: they are valid pane id
+        // syntax and valid agent names at the same time.
+        assert!(is_valid_pane_id("worker-1"));
+        assert!(is_valid_pane_id("review-2"));
     }
 }
