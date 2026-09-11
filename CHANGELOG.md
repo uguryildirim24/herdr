@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+- Experimental agent parent nesting (`[experimental] agent_parent_nesting = true`) allowing child worker agents to nest under their parent orchestrator in the sidebar Agents panel.
+- Collapsible subtrees in the Agents panel with chevron toggle and roll-up status badge for hidden child agents.
+- `--parent <PANE_ID>` flag on `herdr agent start` to assign a parent pane token upon agent startup.
+- `herdr agent set-parent <agent|pane_id> (<parent_pane_id> | --clear)` command to assign or remove an agent's parent metadata token.
+
 ## [0.9.1] - 2026-09-16
 
 ### Added
@@ -60,6 +66,7 @@
 - Windows mouse capture preserves SGR coordinates, including past column 95, and reattaching restores mouse reporting. Legacy SSH mouse reports no longer produce phantom characters or block subsequent input. (#4155, #3735, #4080, thanks @JJLiebig)
 - Git Bash SSH connections honor host aliases from the user's SSH config. (#3947, #4054, thanks @JJLiebig)
 - Windows login-mode panes honor the configured shell and keep PowerShell working-directory reports current. Pane launch paths use consistent directory casing. (#1445, #4060, #4065, #4199, thanks @JJLiebig)
+
 
 ## [0.9.0] - 2026-09-07
 
