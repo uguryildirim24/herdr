@@ -933,7 +933,7 @@ impl ClientShellState {
                 let agents = super::agent_sidebar::visible_agent_pane_ids(
                     snapshot,
                     &self.config,
-                    &self.collapsed_groups,
+                    Some(&self.collapsed_groups),
                     None,
                 );
                 Some(Method::PaneFocus(PaneTarget {
@@ -944,7 +944,7 @@ impl ClientShellState {
                 let agents = super::agent_sidebar::visible_agent_pane_ids(
                     snapshot,
                     &self.config,
-                    &self.collapsed_groups,
+                    Some(&self.collapsed_groups),
                     None,
                 );
                 if agents.is_empty() {

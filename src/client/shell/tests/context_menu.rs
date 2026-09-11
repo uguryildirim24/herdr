@@ -1,3 +1,5 @@
+use ratatui::layout::Rect;
+
 use super::*;
 use crate::api::schema::AgentStatus;
 use crate::protocol::ClientShellAgent;
@@ -45,8 +47,14 @@ fn context_menu_on_parent_agent_row_offers_expand_collapse_and_toggles_key() {
     ];
     state.set_snapshot(Box::new(snap));
 
+    // The rendered chevron targets are the authority on which rows are parents.
+    state
+        .hits
+        .agent_group_toggles
+        .push((Rect::new(29, 5, 1, 1), "p1".into(), "agent:p1".into()));
+
     // Open context menu on parent agent
-    state.open_agent_context_menu("p1".into(), 10, 5);
+    assert!(state.open_agent_context_menu("p1", 10, 5));
 
     // Verify context menu overlay opened with "Collapse" option
     let Some(ClientShellOverlay::ContextMenu(menu)) = &state.overlay else {
@@ -61,10 +69,9 @@ fn context_menu_on_parent_agent_row_offers_expand_collapse_and_toggles_key() {
 
     // Verify key added to collapsed_groups
     assert!(state.collapsed_groups.contains("agent:p1"));
-    assert!(state.config.collapsed_groups.contains("agent:p1"));
 
     // Open context menu on parent agent again (now collapsed)
-    state.open_agent_context_menu("p1".into(), 10, 5);
+    assert!(state.open_agent_context_menu("p1", 10, 5));
     let Some(ClientShellOverlay::ContextMenu(menu_collapsed)) = &state.overlay else {
         panic!("context menu overlay should be open");
     };
@@ -74,5 +81,29 @@ fn context_menu_on_parent_agent_row_offers_expand_collapse_and_toggles_key() {
     let mut outcome = ClientShellInput::default();
     state.activate_context_menu_item(0, &mut outcome);
     assert!(!state.collapsed_groups.contains("agent:p1"));
-    assert!(!state.config.collapsed_groups.contains("agent:p1"));
+
+    // A row without a rendered chevron is not a parent: no menu, and the caller is told so.
+    state.overlay = None;
+    assert!(!state.open_agent_context_menu("p2", 10, 6));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn agent_context_menu_uses_the_machine_prefixed_group_key() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.hits.agent_group_toggles.push((
+        Rect::new(29, 5, 1, 1),
+        "w1:p1".into(),
+        "agent:remote:w1:p1".into(),
+    ));
+
+    assert!(state.open_agent_context_menu("w1:p1", 10, 5));
+    let mut outcome = ClientShellInput::default();
+    state.activate_context_menu_item(0, &mut outcome);
+
+    assert!(state.collapsed_groups.contains("agent:remote:w1:p1"));
+    assert!(!state.collapsed_groups.contains("agent:w1:p1"));
 }

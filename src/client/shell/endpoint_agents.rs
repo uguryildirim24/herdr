@@ -72,7 +72,8 @@ pub(super) fn render_expanded(
         hits,
         |row| row.agent.rows.len(),
         |buffer, rect, row, hits| {
-            super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
+            // Flat rows never produce a chevron target.
+            let _ = super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
             if row.stale {
                 buffer.set_style(
                     rect,
@@ -103,7 +104,10 @@ fn agent_rows(
         .iter()
         .filter_map(|endpoint| {
             endpoint.snapshot.as_deref().map(|snapshot| {
-                super::agent_sidebar::agent_rows(snapshot, config, Some(&endpoint.label))
+                // Multi-machine rows stay flat in v1: the aggregate panel owns its own
+                // ordering and navigation, so nesting is applied in the single-machine
+                // agents panel only (spec 3.4 and open question 11).
+                super::agent_sidebar::agent_rows(snapshot, config, None, Some(&endpoint.label))
                     .into_iter()
                     .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
                     .collect::<Vec<_>>()
