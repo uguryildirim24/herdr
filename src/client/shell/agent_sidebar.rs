@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
@@ -15,6 +15,28 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    pub(super) depth: usize,
+    pub(super) child_count: usize,
+    pub(super) collapsed: bool,
+    pub(super) hidden_descendants: usize,
+    pub(super) worst_hidden_status: Option<crate::api::schema::AgentStatus>,
+    pub(super) is_last_child: bool,
+}
+
+pub(super) fn visible_agent_pane_ids(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
+    machine: Option<&str>,
+) -> Vec<String> {
+    let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return ordered;
+    }
+    super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine)
+        .into_iter()
+        .map(|row| row.pane_id)
+        .collect()
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -82,7 +104,9 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config);
+            if let Some(toggle) = render_agent_row(buffer, rect, row, config) {
+                hits.agent_group_toggles.push(toggle);
+            }
         },
     );
 }
@@ -234,20 +258,16 @@ pub(super) fn render_agent_list<T>(
     }
 }
 
-pub(super) fn agent_rows(
-    snapshot: &ClientShellSnapshot,
-    config: &ClientShellConfig,
-    machine: Option<&str>,
-) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
-        .into_iter()
-        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
-        .collect()
-}
-
-pub(super) fn agent_row(
-    snapshot: &ClientShellSnapshot,
+#[allow(clippy::too_many_arguments)]
+fn build_agent_row(
     pane_id: &str,
+    depth: usize,
+    child_count: usize,
+    collapsed: bool,
+    hidden_descendants: usize,
+    worst_hidden_status: Option<crate::api::schema::AgentStatus>,
+    is_last_child: bool,
+    snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     machine: Option<&str>,
 ) -> Option<AgentRow> {
@@ -315,7 +335,78 @@ pub(super) fn agent_row(
         status: agent.agent_status,
         focused: agent.focused,
         rows,
+        depth,
+        child_count,
+        collapsed,
+        hidden_descendants,
+        worst_hidden_status,
+        is_last_child,
     })
+}
+
+pub(super) fn agent_rows(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Vec<AgentRow> {
+    let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return ordered
+            .into_iter()
+            .filter_map(|pane_id| {
+                build_agent_row(
+                    &pane_id, 0, 0, false, 0, None, false, snapshot, config, machine,
+                )
+            })
+            .collect();
+    }
+
+    let tree_rows =
+        super::agent_tree::nest_agents(&ordered, snapshot, &config.collapsed_groups, machine);
+    let mut rows = Vec::with_capacity(tree_rows.len());
+    for (i, tree_row) in tree_rows.iter().enumerate() {
+        let is_last_child = if tree_row.depth == 0 {
+            false
+        } else {
+            let mut last = true;
+            for next in &tree_rows[i + 1..] {
+                if next.depth == tree_row.depth {
+                    last = false;
+                    break;
+                }
+                if next.depth < tree_row.depth {
+                    break;
+                }
+            }
+            last
+        };
+        if let Some(row) = build_agent_row(
+            &tree_row.pane_id,
+            tree_row.depth,
+            tree_row.child_count,
+            tree_row.collapsed,
+            tree_row.hidden_descendants,
+            tree_row.worst_hidden_status,
+            is_last_child,
+            snapshot,
+            config,
+            machine,
+        ) {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+pub(super) fn agent_row(
+    snapshot: &ClientShellSnapshot,
+    pane_id: &str,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Option<AgentRow> {
+    build_agent_row(
+        pane_id, 0, 0, false, 0, None, false, snapshot, config, machine,
+    )
 }
 
 pub(super) fn render_agent_row(
@@ -323,7 +414,7 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
-) {
+) -> Option<(Rect, String)> {
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -353,9 +444,57 @@ pub(super) fn render_agent_row(
     } else {
         row.rows.clone()
     };
+
+    let clamped_depth = row.depth.min(3);
+    let prefix_style = Style::default().fg(palette.overlay0);
+
+    let toggle_info = if row.child_count > 0 {
+        let key = super::agent_tree::agent_group_key(None, &row.pane_id);
+        if row.collapsed {
+            let count_str = format!("{}", row.hidden_descendants);
+            let worst_status = row.worst_hidden_status.unwrap_or(row.status);
+            let worst_icon = status_icon(worst_status, config.status_indicators);
+            let width = 4 + count_str.len() as u16;
+            Some((key, true, width, count_str, worst_status, worst_icon))
+        } else {
+            Some((key, false, 1u16, String::new(), row.status, ""))
+        }
+    } else {
+        None
+    };
+
+    let toggle_width = toggle_info.as_ref().map_or(0, |(_, _, w, _, _, _)| *w);
+
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
-        let indent = if index == 0 { 1 } else { 3 };
-        let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
+        let mut spans = if row.depth == 0 {
+            let indent = if index == 0 { 1 } else { 3 };
+            vec![ratatui::text::Span::raw(" ".repeat(indent))]
+        } else {
+            let leading = "  ".repeat(clamped_depth.saturating_sub(1));
+            let branch = if index == 0 {
+                if row.is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                }
+            } else if row.is_last_child {
+                "   "
+            } else {
+                "│  "
+            };
+            vec![ratatui::text::Span::styled(
+                format!("{leading}{branch}"),
+                prefix_style,
+            )]
+        };
+
+        let prefix_width = spans
+            .iter()
+            .map(|s| display_width(&s.content))
+            .sum::<usize>();
+        let right_reserved = if index == 0 { toggle_width as usize } else { 0 };
+        let available = (rect.width as usize).saturating_sub(prefix_width + right_reserved);
+
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
             icon,
@@ -364,12 +503,70 @@ pub(super) fn render_agent_row(
             secondary,
             secondary,
             palette,
-            rect.width.saturating_sub(indent as u16) as usize,
+            available,
         ));
         Paragraph::new(Line::from(spans)).style(row_style).render(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,
         );
+    }
+
+    if let Some((key, collapsed, width, count_str, worst_status, worst_icon)) = toggle_info {
+        let toggle_rect = Rect::new(rect.right().saturating_sub(width), rect.y, width, 1);
+        if collapsed {
+            put_text(
+                buffer,
+                toggle_rect.x,
+                toggle_rect.y,
+                1,
+                "▸",
+                Style::default().fg(palette.accent),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 1,
+                toggle_rect.y,
+                1,
+                " ",
+                Style::default(),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 2,
+                toggle_rect.y,
+                count_str.len() as u16,
+                &count_str,
+                Style::default().fg(palette.overlay0),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 2 + count_str.len() as u16,
+                toggle_rect.y,
+                1,
+                " ",
+                Style::default(),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 3 + count_str.len() as u16,
+                toggle_rect.y,
+                1,
+                worst_icon,
+                Style::default().fg(status_color(worst_status, palette)),
+            );
+        } else {
+            put_text(
+                buffer,
+                toggle_rect.x,
+                toggle_rect.y,
+                1,
+                "▾",
+                Style::default().fg(palette.accent),
+            );
+        }
+        Some((toggle_rect, key))
+    } else {
+        None
     }
 }
 
