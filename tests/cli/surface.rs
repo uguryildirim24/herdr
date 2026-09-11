@@ -628,3 +628,157 @@ fn removed_show_changelog_flag_fails_before_nested_guard() {
         "unknown flag should be rejected before nested guard: {stderr}"
     );
 }
+
+#[test]
+fn agent_set_parent_sends_report_metadata_request() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream, line) = accept_fake_cli_operation(&listener);
+        stream
+            .write_all(br#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        line
+    });
+
+    let run = run_cli(&socket_path, &["agent", "set-parent", "w1:p2", "w1:p1"]);
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let line = server.join().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "pane.report_metadata");
+    assert_eq!(request["params"]["pane_id"], "w1:p2");
+    assert_eq!(request["params"]["source"], "herdr:agent-set-parent");
+    assert_eq!(request["params"]["tokens"]["parent"], "w1:p1");
+
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_set_parent_clear_sends_null_token() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream, line) = accept_fake_cli_operation(&listener);
+        stream
+            .write_all(br#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        line
+    });
+
+    let run = run_cli(&socket_path, &["agent", "set-parent", "w1:p2", "--clear"]);
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let line = server.join().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "pane.report_metadata");
+    assert_eq!(request["params"]["pane_id"], "w1:p2");
+    assert_eq!(request["params"]["source"], "herdr:agent-set-parent");
+    assert!(request["params"]["tokens"]["parent"].is_null());
+
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_set_parent_resolves_agent_name_before_report_metadata() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream1, line1) = accept_fake_cli_operation(&listener);
+        let resp1 = r#"{"id":"cli:agent:set-parent","result":{"agent":{"pane_id":"w1:p9","terminal_id":"t1"}}}"#;
+        stream1.write_all(resp1.as_bytes()).unwrap();
+        stream1.write_all(b"\n").unwrap();
+        stream1.flush().unwrap();
+
+        let (mut stream2, line2) = accept_fake_cli_operation(&listener);
+        let resp2 = r#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#;
+        stream2.write_all(resp2.as_bytes()).unwrap();
+        stream2.write_all(b"\n").unwrap();
+        stream2.flush().unwrap();
+
+        (line1, line2)
+    });
+
+    let run = run_cli(&socket_path, &["agent", "set-parent", "worker", "w1:p1"]);
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let (line1, line2) = server.join().unwrap();
+    let req1: serde_json::Value = serde_json::from_str(&line1).unwrap();
+    assert_eq!(req1["method"], "agent.get");
+    assert_eq!(req1["params"]["target"], "worker");
+
+    let req2: serde_json::Value = serde_json::from_str(&line2).unwrap();
+    assert_eq!(req2["method"], "pane.report_metadata");
+    assert_eq!(req2["params"]["pane_id"], "w1:p9");
+    assert_eq!(req2["params"]["source"], "herdr:agent-set-parent");
+    assert_eq!(req2["params"]["tokens"]["parent"], "w1:p1");
+
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_cli_rejects_invalid_pane_id_before_socket_request() {
+    let socket_path = Path::new("/nonexistent/herdr-invalid-pane-test.sock");
+
+    for args in [
+        &[
+            "agent", "start", "worker", "--kind", "pi", "--pane", "invalid",
+        ][..],
+        &[
+            "agent", "start", "worker", "--kind", "pi", "--pane", "w1:p1", "--parent", "invalid",
+        ][..],
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            "w1:p1",
+            "--parent",
+            "not-a-pane",
+        ][..],
+        &["agent", "set-parent", "worker", "invalid"][..],
+        &["agent", "set-parent", "w1:p1", "not-a-pane"][..],
+    ] {
+        let run = run_cli(socket_path, args);
+        assert_eq!(
+            run.status.code(),
+            Some(2),
+            "command {:?} should fail with code 2",
+            args
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains("invalid pane id"),
+            "stderr for {:?} should mention invalid pane id, got: {}",
+            args,
+            stderr
+        );
+    }
+}

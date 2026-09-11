@@ -490,6 +490,80 @@ fn agent_start_command_works() {
 }
 
 #[test]
+fn agent_start_with_parent_reports_parent_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let fake_pi = bin.join("pi");
+    fs::write(
+        &fake_pi,
+        format!(
+            "#!/bin/sh\nexport HERDR_AGENT=pi\n'{}' pane report-agent \"$HERDR_PANE_ID\" --source custom:fake-pi --agent pi --state idle >/dev/null\nwhile IFS= read -r prompt; do :; done\n",
+            env!("CARGO_BIN_EXE_herdr"),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let herdr = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created_parent = run_cli_json(
+        &socket_path,
+        &["workspace", "create", "--cwd", base.to_str().unwrap()],
+    );
+    let parent_pane_id = created_parent["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let created_worker = run_cli_json(
+        &socket_path,
+        &["workspace", "create", "--cwd", base.to_str().unwrap()],
+    );
+    let worker_pane_id = created_worker["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let started = run_cli_json(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            &worker_pane_id,
+            "--parent",
+            &parent_pane_id,
+            "--timeout",
+            "8000",
+        ],
+    );
+    assert_eq!(started["result"]["type"], "agent_started");
+    assert_eq!(started["result"]["agent"]["name"], "worker");
+    assert_eq!(
+        started["result"]["agent"]["tokens"]["parent"],
+        parent_pane_id
+    );
+
+    let get_worker = run_cli_json(&socket_path, &["agent", "get", "worker"]);
+    assert_eq!(
+        get_worker["result"]["agent"]["tokens"]["parent"],
+        parent_pane_id
+    );
+
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
 fn agent_start_rejects_a_shell_replaced_by_a_foreground_program() {
     let base = unique_test_dir();
     let config_home = base.join("config");
