@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Consumed by lane w2 in parallel render work.
-
 use std::collections::{HashMap, HashSet};
 
 use super::ClientShellSnapshot;
@@ -43,16 +41,19 @@ pub(super) fn nest_agents(
     collapsed_groups: &HashSet<String>,
     machine: Option<&str>,
 ) -> Vec<AgentTreeRow> {
+    // One pass over the snapshot keeps this O(n); a scan per ordered pane id would be
+    // quadratic in the number of agents on every frame.
+    let agents_by_pane_id = snapshot
+        .agents
+        .iter()
+        .map(|agent| (agent.pane_id.as_str(), agent))
+        .collect::<HashMap<_, _>>();
     let mut ordered_agents =
         Vec::<Option<&crate::protocol::ClientShellAgent>>::with_capacity(ordered.len());
     let mut order_to_index = HashMap::with_capacity(ordered.len());
 
     for (index, pane_id) in ordered.iter().enumerate() {
-        if let Some(agent) = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.pane_id == *pane_id)
-        {
+        if let Some(agent) = agents_by_pane_id.get(pane_id.as_str()).copied() {
             order_to_index.insert(pane_id.as_str(), index);
             ordered_agents.push(Some(agent));
         } else {
@@ -94,7 +95,7 @@ pub(super) fn nest_agents(
         let Some(parent) = maybe_parent else {
             continue;
         };
-        if cycle[index] || cycle[parent] {
+        if cycle[index] {
             continue;
         }
         children[parent].push(index);
@@ -123,8 +124,9 @@ pub(super) fn nest_agents(
         let Some(_) = ordered_agents[index] else {
             continue;
         };
-        let valid_parent = parent_of[index].is_some_and(|parent| !cycle[parent] && !cycle[index]);
-        if valid_parent {
+        // Cycle members are roots even though they carry a parent edge; every other node
+        // with a parent is emitted by its parent's subtree walk.
+        if parent_of[index].is_some() && !cycle[index] {
             continue;
         }
         emit_tree_rows(
@@ -511,6 +513,132 @@ mod tests {
         assert_eq!(rows[0].depth, 0);
         assert_eq!(rows[1].depth, 0);
         assert_eq!(rows[2].depth, 0);
+    }
+
+    #[test]
+    fn child_of_cycle_member_still_nests_under_it() {
+        // Spec 8 item 7: the cycle members are top level, and a node whose parent chain
+        // reaches the cycle without being in it still nests under its parent.
+        let ordered = ordered(&["cyc1", "cyc2", "child", "grand"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("cyc1", "ws_1", AgentStatus::Idle, &[("parent", "cyc2")]),
+                agent("cyc2", "ws_1", AgentStatus::Idle, &[("parent", "cyc1")]),
+                agent("child", "ws_1", AgentStatus::Working, &[("parent", "cyc1")]),
+                agent(
+                    "grand",
+                    "ws_1",
+                    AgentStatus::Blocked,
+                    &[("parent", "child")],
+                ),
+            ]),
+            &HashSet::new(),
+            None,
+        );
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.pane_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cyc1", "child", "grand", "cyc2"]
+        );
+        assert_eq!(rows[0].depth, 0);
+        assert_eq!(rows[0].child_count, 1);
+        assert_eq!(rows[1].depth, 1);
+        assert_eq!(rows[2].depth, 2);
+        assert_eq!(rows[3].depth, 0);
+        assert_eq!(rows[3].child_count, 0);
+    }
+
+    #[test]
+    fn collapsed_cycle_member_rolls_up_its_own_descendants() {
+        let ordered = ordered(&["cyc1", "cyc2", "child"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("cyc1", "ws_1", AgentStatus::Idle, &[("parent", "cyc2")]),
+                agent("cyc2", "ws_1", AgentStatus::Idle, &[("parent", "cyc1")]),
+                agent("child", "ws_1", AgentStatus::Blocked, &[("parent", "cyc1")]),
+            ]),
+            &[agent_group_key(None, "cyc1")].into_iter().collect(),
+            None,
+        );
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.pane_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cyc1", "cyc2"]
+        );
+        assert!(rows[0].collapsed);
+        assert_eq!(rows[0].hidden_descendants, 1);
+        assert_eq!(rows[0].worst_hidden_status, Some(AgentStatus::Blocked));
+    }
+
+    #[test]
+    fn worst_hidden_status_spans_every_hidden_branch() {
+        let ordered = ordered(&["parent", "a", "a_child", "b"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("parent", "ws_1", AgentStatus::Blocked, &[]),
+                agent("a", "ws_1", AgentStatus::Idle, &[("parent", "parent")]),
+                agent("a_child", "ws_1", AgentStatus::Working, &[("parent", "a")]),
+                agent("b", "ws_1", AgentStatus::Done, &[("parent", "parent")]),
+            ]),
+            &[agent_group_key(None, "parent")].into_iter().collect(),
+            None,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].child_count, 2);
+        assert_eq!(rows[0].hidden_descendants, 3);
+        // Working beats Done and Idle, and the parent's own Blocked status is not rolled up.
+        assert_eq!(rows[0].worst_hidden_status, Some(AgentStatus::Working));
+    }
+
+    #[test]
+    fn children_keep_relative_order_and_parent_keeps_its_index() {
+        let ordered = ordered(&["first", "c2", "parent", "c1", "last"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("first", "ws_1", AgentStatus::Idle, &[]),
+                agent("c2", "ws_1", AgentStatus::Idle, &[("parent", "parent")]),
+                agent("parent", "ws_1", AgentStatus::Idle, &[]),
+                agent("c1", "ws_1", AgentStatus::Idle, &[("parent", "parent")]),
+                agent("last", "ws_1", AgentStatus::Idle, &[]),
+            ]),
+            &HashSet::new(),
+            None,
+        );
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.pane_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "parent", "c2", "c1", "last"]
+        );
+        assert_eq!(rows[2].depth, 1);
+        assert_eq!(rows[3].depth, 1);
+    }
+
+    #[test]
+    fn same_tab_is_not_required() {
+        let ordered = ordered(&["parent", "child"]);
+        let mut child = agent("child", "ws_1", AgentStatus::Idle, &[("parent", "parent")]);
+        child.tab_id = "other_tab".into();
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![agent("parent", "ws_1", AgentStatus::Idle, &[]), child]),
+            &HashSet::new(),
+            None,
+        );
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].pane_id, "child");
+        assert_eq!(rows[1].depth, 1);
     }
 
     #[test]
