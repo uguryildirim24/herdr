@@ -464,6 +464,51 @@ herdr pane report-metadata <pane_id> \
 
 侧边栏行设置仅影响展开的桌面侧边栏。折叠视图和移动视图仍使用紧凑布局。
 
+### Agent nesting (experimental)
+
+Herdr can display worker agents nested under their parent orchestrator agent in the sidebar Agents panel.
+
+```toml
+[experimental]
+agent_parent_nesting = true
+```
+
+The default value is `false`. When `false`, the Agents panel renders flat. When `true` and no pane has a `parent` token, the panel also renders flat.
+
+**Lineage contract**: Lineage uses one pane metadata token named `parent`. The value is the pane ID of the owning agent (for example, `w1:p1`). Herdr only reads this token. Herdr does not infer lineage from pane creation.
+
+**Nesting rules**: An agent pane nests under a parent agent pane when:
+- The child agent's `parent` token matches the parent's `pane_id`.
+- The parent agent is present in the same ordered agent list.
+- Both agents belong to the same workspace on the same machine.
+- The parent is not the child itself.
+
+If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by two columns per depth level, clamped at depth 3.
+
+**Collapse behavior**: A parent agent row displays a chevron toggle. Clicking the chevron collapses or expands child agents. Herdr saves collapse state in client preferences under `agent:<pane_id>` (or `agent:<machine>:<pane_id>` for multi-machine setups). When collapsed:
+- The sidebar hides the entire child subtree.
+- Hidden child rows do not receive mouse clicks.
+- Hidden child rows are skipped during indexed focus jumps and next or previous agent navigation.
+- The collapsed parent row displays a roll-up badge with the count of hidden descendants and one status mark. The status mark shows the most urgent status among hidden descendants (`blocked` > `working` > `done` > `idle` > `unknown`).
+- APIs such as `herdr agent list`, notifications, and attention counts continue to track all agents normally.
+
+**CLI commands**: You can set parent lineage directly from the CLI:
+
+```bash
+# Start a worker nested under an orchestrator pane
+herdr agent start worker --kind pi --pane w1:p2 --parent w1:p1
+
+# Link an existing agent to a parent pane
+herdr agent set-parent worker w1:p1
+
+# Clear parent lineage
+herdr agent set-parent worker --clear
+```
+
+You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
+
+**Server restart and persistence**: Pane metadata does not survive a server restart. When the Herdr server restarts, pane metadata tokens reset to empty (`src/persist/snapshot.rs` does not save metadata tokens, and `src/persist/restore.rs` resets them on restore). Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
+
 ## 通知
 
 当后台智能体完成任务或需要输入时，Herdr 可以通知你：

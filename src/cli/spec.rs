@@ -374,6 +374,19 @@ fn agent_command() -> Command {
                         .required(true),
                 ),
         )
+        .subcommand(
+            Command::new("set-parent")
+                .about("Set or clear the parent agent pane")
+                .override_usage("herdr agent set-parent <TARGET> <PARENT_PANE_ID>|--clear")
+                .arg(required("target", "TARGET"))
+                .arg(Arg::new("parent_pane_id").value_name("PARENT_PANE_ID"))
+                .arg(flag("clear"))
+                .group(
+                    ArgGroup::new("set_parent")
+                        .args(["parent_pane_id", "clear"])
+                        .required(true),
+                ),
+        )
         .subcommand(id_command("focus", "target", "Focus an agent"))
         .subcommand(
             Command::new("wait")
@@ -415,6 +428,10 @@ fn agent_command() -> Command {
                     option("pane", "ID")
                         .required(true)
                         .help("Existing pane at an interactive shell prompt"),
+                )
+                .arg(
+                    option("parent", "PANE_ID")
+                        .help("Parent agent pane id to nest under in the agent list"),
                 )
                 .arg(
                     option("timeout", "MS")
@@ -1205,6 +1222,45 @@ mod tests {
     }
 
     #[test]
+    fn agent_set_parent_requires_exactly_one_parent_or_clear() {
+        for valid in [
+            &["herdr", "agent", "set-parent", "reviewer", "w1:p1"][..],
+            &["herdr", "agent", "set-parent", "reviewer", "--clear"][..],
+        ] {
+            assert!(super::command().try_get_matches_from(valid).is_ok());
+        }
+        for invalid in [
+            &["herdr", "agent", "set-parent", "reviewer"][..],
+            &[
+                "herdr",
+                "agent",
+                "set-parent",
+                "reviewer",
+                "w1:p1",
+                "--clear",
+            ][..],
+        ] {
+            assert!(super::command().try_get_matches_from(invalid).is_err());
+        }
+
+        let mut help = Vec::new();
+        super::write_requested_help(
+            &[
+                "herdr".to_string(),
+                "agent".to_string(),
+                "set-parent".to_string(),
+                "--help".to_string(),
+            ],
+            &mut help,
+            || {},
+        )
+        .unwrap();
+        assert!(String::from_utf8(help)
+            .unwrap()
+            .contains("Usage: herdr agent set-parent <TARGET> <PARENT_PANE_ID>|--clear"));
+    }
+
+    #[test]
     fn worktree_json_compatibility_flag_stays_out_of_public_spec() {
         let cmd = super::command();
         for subcommand in ["list", "create", "open", "remove"] {
@@ -1251,6 +1307,9 @@ mod tests {
             .any(|subcommand| subcommand.get_name() == "send-keys"));
         assert!(agent
             .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "set-parent"));
+        assert!(agent
+            .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait"));
         assert!(agent
             .get_subcommands()
@@ -1290,6 +1349,7 @@ mod tests {
                 .map(str::to_string)
         );
         assert!(has_option(agent_start, "pane"));
+        assert!(has_option(agent_start, "parent"));
         for legacy in ["cwd", "workspace", "tab", "split", "focus", "env", "argv"] {
             assert!(!has_option(agent_start, legacy), "legacy option --{legacy}");
         }
