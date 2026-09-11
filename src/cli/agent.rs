@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 use crate::api::schema::{
     AgentPromptParams, AgentPromptWaitOptions, AgentReadParams, AgentRenameParams,
     AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams, EmptyParams, ErrorBody,
-    ErrorResponse, Method, PaneProcessInfoParams, PaneTarget, ReadFormat, ReadSource, Request,
+    ErrorResponse, Method, PaneProcessInfoParams, PaneReportMetadataParams, PaneTarget, ReadFormat,
+    ReadSource, Request,
 };
 
 const AGENT_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -22,6 +23,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         "send-keys" => agent_send_keys(&args[1..]),
         "prompt" => agent_prompt(&args[1..]),
         "rename" => agent_rename(&args[1..]),
+        "set-parent" => agent_set_parent(&args[1..]),
         "focus" => agent_focus(&args[1..]),
         "wait" => agent_wait(&args[1..]),
         "attach" => agent_attach(&args[1..]),
@@ -286,9 +288,33 @@ fn matched_rule_region_preview<'a>(
         .filter(|preview| !preview.is_empty())
 }
 
+fn is_valid_pane_id(id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    if let Some((ws_raw, pane_number_raw)) = id.rsplit_once(":p") {
+        return !ws_raw.is_empty()
+            && !pane_number_raw.is_empty()
+            && crate::workspace::decode_public_number(pane_number_raw).is_some();
+    }
+    if let Some((ws_raw, pane_number_raw)) = id.rsplit_once('-') {
+        return !ws_raw.is_empty()
+            && !pane_number_raw.is_empty()
+            && pane_number_raw.parse::<usize>().is_ok();
+    }
+    if let Some(rest) = id.strip_prefix("p_") {
+        if let Some((ws_raw, pane_raw)) = rest.rsplit_once('_') {
+            return !ws_raw.is_empty() && pane_raw.parse::<u32>().is_ok();
+        }
+        return rest.parse::<u32>().is_ok();
+    }
+    false
+}
+
 fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let Some(name) = args.first() else {
-        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]");
+        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [-- <agent-args...>]");
         return Ok(2);
     };
     let separator = args
@@ -297,6 +323,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         .unwrap_or(args.len());
     let mut kind = None;
     let mut pane_id = None;
+    let mut parent_pane_id = None;
     let mut timeout_ms = None;
     let mut index = 1;
     while index < separator {
@@ -314,7 +341,23 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                     eprintln!("missing value for --pane");
                     return Ok(2);
                 };
+                if !is_valid_pane_id(value) {
+                    eprintln!("invalid pane id: {value}");
+                    return Ok(2);
+                }
                 pane_id = Some(super::normalize_pane_id(value));
+                index += 2;
+            }
+            "--parent" => {
+                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
+                    eprintln!("missing value for --parent");
+                    return Ok(2);
+                };
+                if !is_valid_pane_id(value) {
+                    eprintln!("invalid pane id: {value}");
+                    return Ok(2);
+                }
+                parent_pane_id = Some(super::normalize_pane_id(value));
                 index += 2;
             }
             "--timeout" => {
@@ -424,7 +467,57 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         expected_terminal_id,
     );
     match waited {
-        Ok(Ok(agent)) => {
+        Ok(Ok(mut agent)) => {
+            if let Some(parent_id) = parent_pane_id {
+                let target_pane_id = agent["pane_id"].as_str().unwrap_or(&pane_id).to_string();
+                let mut tokens = std::collections::HashMap::new();
+                tokens.insert("parent".to_string(), Some(parent_id.clone()));
+                let report_response = super::send_request(&Request {
+                    id: "cli:agent:start:parent".into(),
+                    method: Method::PaneReportMetadata(PaneReportMetadataParams {
+                        pane_id: target_pane_id,
+                        source: "herdr:agent-start".to_string(),
+                        agent: None,
+                        applies_to_source: None,
+                        title: None,
+                        display_agent: None,
+                        state_labels: std::collections::HashMap::new(),
+                        tokens,
+                        clear_title: false,
+                        clear_display_agent: false,
+                        clear_state_labels: false,
+                        seq: None,
+                        ttl_ms: None,
+                    }),
+                });
+                match report_response {
+                    Ok(ref resp) if resp.get("error").is_some() => {
+                        let err_msg = resp["error"]["message"]
+                            .as_str()
+                            .unwrap_or("failed to report parent metadata");
+                        return super::print_response(&cli_agent_error(
+                            "cli:agent:start",
+                            "agent_parent_report_failed",
+                            format!(
+                                "agent {name} is running, but failed to report parent metadata: {err_msg}"
+                            ),
+                        ));
+                    }
+                    Err(err) => {
+                        return super::print_response(&cli_agent_error(
+                            "cli:agent:start",
+                            "agent_parent_report_failed",
+                            format!(
+                                "agent {name} is running, but failed to report parent metadata: {err}"
+                            ),
+                        ));
+                    }
+                    _ => {}
+                }
+                if let Some(tokens_obj) = agent.get_mut("tokens").and_then(|t| t.as_object_mut()) {
+                    tokens_obj.insert("parent".to_string(), serde_json::Value::String(parent_id));
+                }
+            }
             response["result"]["agent"] = agent;
             super::print_response(&response)
         }
@@ -768,6 +861,63 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+fn agent_set_parent(args: &[String]) -> std::io::Result<i32> {
+    let [target, value] = args else {
+        eprintln!("usage: herdr agent set-parent <agent|pane_id> <parent_pane_id>|--clear");
+        return Ok(2);
+    };
+
+    let parent_token = if value == "--clear" {
+        None
+    } else {
+        if !is_valid_pane_id(value) {
+            eprintln!("invalid pane id: {value}");
+            return Ok(2);
+        }
+        Some(super::normalize_pane_id(value))
+    };
+
+    let target_pane_id = if is_valid_pane_id(target) {
+        super::normalize_pane_id(target)
+    } else {
+        let response = resolve_agent_target(target, "cli:agent:set-parent")?;
+        if response.get("error").is_some() {
+            return super::print_response(&response);
+        }
+        let Some(pane_id) = response["result"]["agent"]["pane_id"].as_str() else {
+            return super::print_response(&cli_agent_error(
+                "cli:agent:set-parent",
+                "agent_not_found",
+                format!("could not determine pane id for agent target {target}"),
+            ));
+        };
+        pane_id.to_string()
+    };
+
+    let mut tokens = std::collections::HashMap::new();
+    tokens.insert("parent".to_string(), parent_token);
+
+    let response = super::send_request(&Request {
+        id: "cli:agent:set-parent".into(),
+        method: Method::PaneReportMetadata(PaneReportMetadataParams {
+            pane_id: target_pane_id,
+            source: "herdr:agent-set-parent".into(),
+            agent: None,
+            applies_to_source: None,
+            title: None,
+            display_agent: None,
+            state_labels: std::collections::HashMap::new(),
+            tokens,
+            clear_title: false,
+            clear_display_agent: false,
+            clear_state_labels: false,
+            seq: None,
+            ttl_ms: None,
+        }),
+    })?;
+    super::print_response(&response)
+}
+
 fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
         eprintln!(
@@ -931,11 +1081,12 @@ fn print_agent_help() {
     eprintln!("  herdr agent send-keys <target> <key> [key ...]");
     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent rename <target> <name>|--clear");
+    eprintln!("  herdr agent set-parent <agent|pane_id> <parent_pane_id>|--clear");
     eprintln!("  herdr agent focus <target>");
     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent attach <target> [--takeover]");
     eprintln!(
-        "  herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]"
+        "  herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [-- <agent-args...>]"
     );
     eprintln!("  herdr agent explain <target> [--json|--format text|json] [--verbose]");
     eprintln!(
@@ -950,4 +1101,72 @@ fn parse_timeout(value: &str) -> Result<u64, i32> {
         eprintln!("{err}");
         2
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn is_valid_pane_id_validates_formats() {
+        assert!(is_valid_pane_id("w1:p1"));
+        assert!(is_valid_pane_id("w16:p1"));
+        assert!(is_valid_pane_id("1-1"));
+        assert!(is_valid_pane_id("w1-2"));
+        assert!(is_valid_pane_id("p_1"));
+        assert!(is_valid_pane_id("p_w1_1"));
+
+        assert!(!is_valid_pane_id(""));
+        assert!(!is_valid_pane_id("   "));
+        assert!(!is_valid_pane_id("invalid"));
+        assert!(!is_valid_pane_id("not-a-pane"));
+        assert!(!is_valid_pane_id(":p1"));
+        assert!(!is_valid_pane_id("w1:"));
+        assert!(!is_valid_pane_id("w1:pinvalid"));
+        assert!(!is_valid_pane_id("1-"));
+        assert!(!is_valid_pane_id("-1"));
+    }
+
+    #[test]
+    fn agent_start_rejects_invalid_pane_or_parent() {
+        assert_eq!(
+            agent_start(&args(&["worker", "--kind", "pi", "--pane", "invalid"])).unwrap(),
+            2
+        );
+        assert_eq!(
+            agent_start(&args(&[
+                "worker", "--kind", "pi", "--pane", "w1:p1", "--parent", "invalid"
+            ]))
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            agent_start(&args(&[
+                "worker",
+                "--kind",
+                "pi",
+                "--pane",
+                "w1:p1",
+                "--parent",
+                "not-a-pane"
+            ]))
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn agent_set_parent_rejects_invalid_arguments() {
+        assert_eq!(agent_set_parent(&args(&[])).unwrap(), 2);
+        assert_eq!(agent_set_parent(&args(&["worker"])).unwrap(), 2);
+        assert_eq!(agent_set_parent(&args(&["worker", "invalid"])).unwrap(), 2);
+        assert_eq!(
+            agent_set_parent(&args(&["w1:p2", "not-a-pane"])).unwrap(),
+            2
+        );
+    }
 }
