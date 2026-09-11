@@ -68,6 +68,7 @@ pub(crate) enum ClientShellKeybindingSource {
     Endpoint,
 }
 
+#[derive(Clone)]
 pub(crate) struct ClientShellConfig {
     pub(super) sidebar_width: u16,
     pub(super) sidebar_min_width: u16,
@@ -102,6 +103,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) switch_ascii_input_source_in_prefix: bool,
+    pub(super) agent_parent_nesting: bool,
+    pub(super) collapsed_groups: HashSet<String>,
     pub(super) local_config_path: std::path::PathBuf,
     pub(super) preferences_path: Option<std::path::PathBuf>,
     pub(super) preferences: preferences::ClientChromePreferences,
@@ -150,6 +153,7 @@ pub(super) struct ShellHitMap {
     pub(super) popup: Option<PaneHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
     pub(super) agents: Vec<(Rect, String)>,
+    pub(super) agent_group_toggles: Vec<(Rect, String)>,
     pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
     pub(super) agent_body: Rect,
     pub(super) agent_scrollbar: Rect,
@@ -602,6 +606,11 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+    },
+    Agent {
+        pane_id: String,
+        has_children: bool,
+        collapsed: bool,
     },
 }
 
