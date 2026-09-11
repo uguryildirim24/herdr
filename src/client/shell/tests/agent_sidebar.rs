@@ -494,3 +494,42 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
     assert!(row(2).starts_with("└─ first"));
     assert!(row(3).starts_with("     second"));
 }
+
+#[test]
+fn narrow_sidebar_truncates_nested_rows_without_panicking() {
+    let mut snapshot = snapshot();
+    snapshot.agents = vec![
+        tree_agent("p1", AgentStatus::Working, 1, None),
+        tree_agent("p2", AgentStatus::Blocked, 2, Some("p1")),
+        tree_agent("p3", AgentStatus::Idle, 3, Some("p2")),
+        tree_agent("p4", AgentStatus::Idle, 4, Some("p3")),
+        tree_agent("p5", AgentStatus::Idle, 5, Some("p4")),
+    ];
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+
+    for width in 1..=14u16 {
+        for collapsed in [
+            HashSet::new(),
+            ["agent:p2".to_string()].into_iter().collect(),
+        ] {
+            let area = Rect::new(0, 0, width, 10);
+            let mut buffer = Buffer::empty(area);
+            let mut hits = ShellHitMap::default();
+            let mut scroll = 0;
+            render_agent_panel(
+                &mut buffer,
+                area,
+                &snapshot,
+                &config,
+                &collapsed,
+                &mut scroll,
+                &mut hits,
+            );
+            for (rect, _, _) in &hits.agent_group_toggles {
+                assert!(rect.right() <= area.right(), "toggle escapes width {width}");
+            }
+        }
+    }
+}

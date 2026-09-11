@@ -470,7 +470,9 @@ pub(super) fn render_agent_row(
         None
     };
 
-    let toggle_width = toggle_info.as_ref().map_or(0, |(_, _, w, _, _, _)| *w);
+    let toggle_width = toggle_info
+        .as_ref()
+        .map_or(0, |(_, _, w, _, _, _)| (*w).min(rect.width));
 
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
         let mut spans = if row.depth == 0 {
@@ -520,57 +522,43 @@ pub(super) fn render_agent_row(
         );
     }
 
-    if let Some((key, collapsed, width, count_str, worst_status, worst_icon)) = toggle_info {
-        let toggle_rect = Rect::new(rect.right().saturating_sub(width), rect.y, width, 1);
+    if let Some((key, collapsed, _, count_str, worst_status, worst_icon)) = toggle_info {
+        if toggle_width == 0 {
+            return None;
+        }
+        let toggle_rect = Rect::new(
+            rect.right().saturating_sub(toggle_width),
+            rect.y,
+            toggle_width,
+            1,
+        );
+        let right = toggle_rect.right();
+        let mut x = put_segment(
+            buffer,
+            toggle_rect.x,
+            toggle_rect.y,
+            right,
+            if collapsed { "▸" } else { "▾" },
+            Style::default().fg(palette.accent),
+        );
         if collapsed {
-            put_text(
+            x = put_segment(buffer, x, toggle_rect.y, right, " ", Style::default());
+            x = put_segment(
                 buffer,
-                toggle_rect.x,
+                x,
                 toggle_rect.y,
-                1,
-                "▸",
-                Style::default().fg(palette.accent),
-            );
-            put_text(
-                buffer,
-                toggle_rect.x + 1,
-                toggle_rect.y,
-                1,
-                " ",
-                Style::default(),
-            );
-            put_text(
-                buffer,
-                toggle_rect.x + 2,
-                toggle_rect.y,
-                count_str.len() as u16,
+                right,
                 &count_str,
                 Style::default().fg(palette.overlay0),
             );
-            put_text(
+            x = put_segment(buffer, x, toggle_rect.y, right, " ", Style::default());
+            put_segment(
                 buffer,
-                toggle_rect.x + 2 + count_str.len() as u16,
+                x,
                 toggle_rect.y,
-                1,
-                " ",
-                Style::default(),
-            );
-            put_text(
-                buffer,
-                toggle_rect.x + 3 + count_str.len() as u16,
-                toggle_rect.y,
-                1,
+                right,
                 worst_icon,
                 Style::default().fg(status_color(worst_status, palette)),
-            );
-        } else {
-            put_text(
-                buffer,
-                toggle_rect.x,
-                toggle_rect.y,
-                1,
-                "▾",
-                Style::default().fg(palette.accent),
             );
         }
         Some((toggle_rect, row.pane_id.clone(), key))
@@ -585,6 +573,13 @@ fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: 
             cell.set_char(character).set_style(style);
         }
     }
+}
+
+/// Writes `text` at `x`, clipped to `right`, and returns the next free column.
+fn put_segment(buffer: &mut Buffer, x: u16, y: u16, right: u16, text: &str, style: Style) -> u16 {
+    let width = (display_width(text) as u16).min(right.saturating_sub(x));
+    put_text(buffer, x, y, width, text, style);
+    x.saturating_add(width)
 }
 
 fn display_width(text: &str) -> usize {
