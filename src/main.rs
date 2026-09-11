@@ -407,6 +407,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.
 # allow_nested = false
+# Nest agent rows under orchestrator parents in the sidebar.
+# agent_parent_nesting = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to
