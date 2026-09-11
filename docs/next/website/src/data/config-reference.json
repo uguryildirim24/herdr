@@ -1468,6 +1468,12 @@
           "description": "Deprecated compatibility key for terminal.kitty_graphics. Existing true and false values remain supported; terminal.kitty_graphics takes precedence when both are set."
         },
         {
+          "key": "experimental.agent_parent_nesting",
+          "type": "boolean",
+          "default": "false",
+          "description": "Nest agent rows under orchestrator parents in the sidebar."
+        },
+        {
           "key": "experimental.pane_history",
           "type": "boolean",
           "default": "false",

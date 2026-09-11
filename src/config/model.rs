@@ -1038,6 +1038,8 @@ impl Default for RemoteConfig {
 pub struct ExperimentalConfig {
     /// Allow launching herdr inside an existing herdr pane. Default: false.
     pub allow_nested: bool,
+    /// Nest agent rows under orchestrator parents in the sidebar. Default: false.
+    pub agent_parent_nesting: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.
@@ -1993,6 +1995,19 @@ pane_history = true
         let config: Config = toml::from_str(toml).unwrap();
 
         assert!(config.experimental.pane_history);
+    }
+
+    #[test]
+    fn agent_parent_nesting_is_opt_in() {
+        assert!(!Config::default().experimental.agent_parent_nesting);
+
+        let toml = r#"
+[experimental]
+agent_parent_nesting = true
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+
+        assert!(config.experimental.agent_parent_nesting);
     }
 
     #[test]
