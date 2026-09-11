@@ -511,7 +511,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: Pane metadata does not survive a server restart. When the Herdr server restarts, pane metadata tokens reset to empty (`src/persist/snapshot.rs` does not save metadata tokens, and `src/persist/restore.rs` resets them on restore). Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
+**Server restart and persistence**: Pane metadata tokens do not survive a server restart. Herdr does not save them with the session, so the `parent` token is empty after a restart and the Agents panel shows every agent at the top level. Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
 
 ## Notifications
 

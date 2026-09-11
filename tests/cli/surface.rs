@@ -637,13 +637,22 @@ fn agent_set_parent_sends_report_metadata_request() {
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
+        let (mut resolve_stream, resolve_line) = accept_fake_cli_operation(&listener);
+        resolve_stream
+            .write_all(
+                br#"{"id":"cli:agent:set-parent","result":{"agent":{"pane_id":"w1:p2","terminal_id":"t1"}}}"#,
+            )
+            .unwrap();
+        resolve_stream.write_all(b"\n").unwrap();
+        resolve_stream.flush().unwrap();
+
         let (mut stream, line) = accept_fake_cli_operation(&listener);
         stream
             .write_all(br#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#)
             .unwrap();
         stream.write_all(b"\n").unwrap();
         stream.flush().unwrap();
-        line
+        (resolve_line, line)
     });
 
     let run = run_cli(&socket_path, &["agent", "set-parent", "w1:p2", "w1:p1"]);
@@ -653,7 +662,10 @@ fn agent_set_parent_sends_report_metadata_request() {
         String::from_utf8_lossy(&run.stderr)
     );
 
-    let line = server.join().unwrap();
+    let (resolve_line, line) = server.join().unwrap();
+    let resolve: serde_json::Value = serde_json::from_str(&resolve_line).unwrap();
+    assert_eq!(resolve["method"], "agent.get");
+    assert_eq!(resolve["params"]["target"], "w1:p2");
     let request: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(request["method"], "pane.report_metadata");
     assert_eq!(request["params"]["pane_id"], "w1:p2");
@@ -671,6 +683,15 @@ fn agent_set_parent_clear_sends_null_token() {
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
+        let (mut resolve_stream, _) = accept_fake_cli_operation(&listener);
+        resolve_stream
+            .write_all(
+                br#"{"id":"cli:agent:set-parent","result":{"agent":{"pane_id":"w1:p2","terminal_id":"t1"}}}"#,
+            )
+            .unwrap();
+        resolve_stream.write_all(b"\n").unwrap();
+        resolve_stream.flush().unwrap();
+
         let (mut stream, line) = accept_fake_cli_operation(&listener);
         stream
             .write_all(br#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#)
@@ -781,4 +802,50 @@ fn agent_cli_rejects_invalid_pane_id_before_socket_request() {
             stderr
         );
     }
+}
+
+#[test]
+fn agent_set_parent_resolves_a_name_that_looks_like_a_pane_id() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut resolve_stream, resolve_line) = accept_fake_cli_operation(&listener);
+        resolve_stream
+            .write_all(
+                br#"{"id":"cli:agent:set-parent","result":{"agent":{"pane_id":"w4:p7","terminal_id":"t1"}}}"#,
+            )
+            .unwrap();
+        resolve_stream.write_all(b"\n").unwrap();
+        resolve_stream.flush().unwrap();
+
+        let (mut stream, line) = accept_fake_cli_operation(&listener);
+        stream
+            .write_all(br#"{"id":"cli:agent:set-parent","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        (resolve_line, line)
+    });
+
+    let run = run_cli(&socket_path, &["agent", "set-parent", "worker-1", "w1:p1"]);
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let (resolve_line, line) = server.join().unwrap();
+    let resolve: serde_json::Value = serde_json::from_str(&resolve_line).unwrap();
+    assert_eq!(resolve["method"], "agent.get");
+    assert_eq!(resolve["params"]["target"], "worker-1");
+
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "pane.report_metadata");
+    assert_eq!(request["params"]["pane_id"], "w4:p7");
+    assert_eq!(request["params"]["tokens"]["parent"], "w1:p1");
+
+    cleanup_test_base(&base);
 }
