@@ -15,6 +15,28 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    pub(super) depth: usize,
+    pub(super) child_count: usize,
+    pub(super) collapsed: bool,
+    pub(super) hidden_descendants: usize,
+    pub(super) worst_hidden_status: Option<crate::api::schema::AgentStatus>,
+    pub(super) is_last_child: bool,
+}
+
+pub(super) fn visible_agent_pane_ids(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
+    machine: Option<&str>,
+) -> Vec<String> {
+    let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return ordered;
+    }
+    super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine)
+        .into_iter()
+        .map(|row| row.pane_id)
+        .collect()
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -82,7 +104,9 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config);
+            if let Some(toggle) = render_agent_row(buffer, rect, row, config) {
+                hits.agent_group_toggles.push(toggle);
+            }
         },
     );
 }
@@ -234,81 +258,144 @@ pub(super) fn render_agent_list<T>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_agent_row(
+    pane_id: &str,
+    depth: usize,
+    child_count: usize,
+    collapsed: bool,
+    hidden_descendants: usize,
+    worst_hidden_status: Option<crate::api::schema::AgentStatus>,
+    is_last_child: bool,
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Option<AgentRow> {
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == pane_id)?;
+    let workspace = snapshot
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
+    let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
+    let pane = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id == agent.pane_id);
+    let tab_count = snapshot
+        .tabs
+        .iter()
+        .filter(|candidate| candidate.workspace_id == agent.workspace_id)
+        .count();
+    let tab_label = tab
+        .filter(|tab| tab_count > 1 || tab.custom_label)
+        .map(|tab| tab.label.as_str());
+    let agent_label = agent
+        .display_agent
+        .as_deref()
+        .or(agent.name.as_deref())
+        .or(agent.agent.as_deref())
+        .or(agent.title.as_deref());
+    let labels = agent
+        .state_labels
+        .iter()
+        .cloned()
+        .collect::<HashMap<_, _>>();
+    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let state_text = labels
+        .get(status_text(agent.agent_status))
+        .map(String::as_str)
+        .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+    let canonical_agent = agent
+        .agent
+        .as_deref()
+        .and_then(crate::detect::parse_agent_label);
+    let rows = crate::ui::sidebar_agent_rows(
+        &config.agents,
+        crate::ui::AgentTokenContext {
+            machine,
+            workspace: &workspace.label,
+            tab: tab_label,
+            pane: agent
+                .title
+                .as_deref()
+                .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+            agent_label,
+            terminal_title: agent.terminal_title.as_deref(),
+            terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
+            canonical_agent,
+            tokens: &tokens,
+        },
+        state_text,
+    );
+    Some(AgentRow {
+        pane_id: agent.pane_id.clone(),
+        status: agent.agent_status,
+        focused: agent.focused,
+        rows,
+        depth,
+        child_count,
+        collapsed,
+        hidden_descendants,
+        worst_hidden_status,
+        is_last_child,
+    })
+}
+
 pub(super) fn agent_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     machine: Option<&str>,
 ) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
-        .into_iter()
-        .filter_map(|pane_id| {
-            let agent = snapshot
-                .agents
-                .iter()
-                .find(|agent| agent.pane_id == pane_id)?;
-            let workspace = snapshot
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
-            let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
-            let pane = snapshot
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == agent.pane_id);
-            let tab_count = snapshot
-                .tabs
-                .iter()
-                .filter(|candidate| candidate.workspace_id == agent.workspace_id)
-                .count();
-            let tab_label = tab
-                .filter(|tab| tab_count > 1 || tab.custom_label)
-                .map(|tab| tab.label.as_str());
-            let agent_label = agent
-                .display_agent
-                .as_deref()
-                .or(agent.name.as_deref())
-                .or(agent.agent.as_deref())
-                .or(agent.title.as_deref());
-            let labels = agent
-                .state_labels
-                .iter()
-                .cloned()
-                .collect::<HashMap<_, _>>();
-            let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
-            let state_text = labels
-                .get(status_text(agent.agent_status))
-                .map(String::as_str)
-                .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
-            let canonical_agent = agent
-                .agent
-                .as_deref()
-                .and_then(crate::detect::parse_agent_label);
-            let rows = crate::ui::sidebar_agent_rows(
-                &config.agents,
-                crate::ui::AgentTokenContext {
-                    machine,
-                    workspace: &workspace.label,
-                    tab: tab_label,
-                    pane: agent
-                        .title
-                        .as_deref()
-                        .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
-                    agent_label,
-                    terminal_title: agent.terminal_title.as_deref(),
-                    terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
-                    canonical_agent,
-                    tokens: &tokens,
-                },
-                state_text,
-            );
-            Some(AgentRow {
-                pane_id: agent.pane_id.clone(),
-                status: agent.agent_status,
-                focused: agent.focused,
-                rows,
+    let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return ordered
+            .into_iter()
+            .filter_map(|pane_id| {
+                build_agent_row(
+                    &pane_id, 0, 0, false, 0, None, false, snapshot, config, machine,
+                )
             })
-        })
-        .collect()
+            .collect();
+    }
+
+    let tree_rows =
+        super::agent_tree::nest_agents(&ordered, snapshot, &config.collapsed_groups, machine);
+    let mut rows = Vec::with_capacity(tree_rows.len());
+    for (i, tree_row) in tree_rows.iter().enumerate() {
+        let is_last_child = if tree_row.depth == 0 {
+            false
+        } else {
+            let mut last = true;
+            for next in &tree_rows[i + 1..] {
+                if next.depth == tree_row.depth {
+                    last = false;
+                    break;
+                }
+                if next.depth < tree_row.depth {
+                    break;
+                }
+            }
+            last
+        };
+        if let Some(row) = build_agent_row(
+            &tree_row.pane_id,
+            tree_row.depth,
+            tree_row.child_count,
+            tree_row.collapsed,
+            tree_row.hidden_descendants,
+            tree_row.worst_hidden_status,
+            is_last_child,
+            snapshot,
+            config,
+            machine,
+        ) {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 pub(super) fn render_agent_row(
@@ -316,7 +403,7 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
-) {
+) -> Option<(Rect, String)> {
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -354,9 +441,57 @@ pub(super) fn render_agent_row(
     } else {
         row.rows.clone()
     };
+
+    let clamped_depth = row.depth.min(3);
+    let prefix_style = Style::default().fg(palette.overlay0);
+
+    let toggle_info = if row.child_count > 0 {
+        let key = super::agent_tree::agent_group_key(None, &row.pane_id);
+        if row.collapsed {
+            let count_str = format!("{}", row.hidden_descendants);
+            let worst_status = row.worst_hidden_status.unwrap_or(row.status);
+            let worst_icon = status_icon(worst_status, config.status_indicators);
+            let width = 4 + count_str.len() as u16;
+            Some((key, true, width, count_str, worst_status, worst_icon))
+        } else {
+            Some((key, false, 1u16, String::new(), row.status, ""))
+        }
+    } else {
+        None
+    };
+
+    let toggle_width = toggle_info.as_ref().map_or(0, |(_, _, w, _, _, _)| *w);
+
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
-        let indent = if index == 0 { 1 } else { 3 };
-        let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
+        let mut spans = if row.depth == 0 {
+            let indent = if index == 0 { 1 } else { 3 };
+            vec![ratatui::text::Span::raw(" ".repeat(indent))]
+        } else {
+            let leading = "  ".repeat(clamped_depth.saturating_sub(1));
+            let branch = if index == 0 {
+                if row.is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                }
+            } else if row.is_last_child {
+                "   "
+            } else {
+                "│  "
+            };
+            vec![ratatui::text::Span::styled(
+                format!("{leading}{branch}"),
+                prefix_style,
+            )]
+        };
+
+        let prefix_width = spans
+            .iter()
+            .map(|s| display_width(&s.content))
+            .sum::<usize>();
+        let right_reserved = if index == 0 { toggle_width as usize } else { 0 };
+        let available = (rect.width as usize).saturating_sub(prefix_width + right_reserved);
+
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
             icon,
@@ -365,12 +500,70 @@ pub(super) fn render_agent_row(
             secondary,
             secondary,
             palette,
-            rect.width.saturating_sub(indent as u16) as usize,
+            available,
         ));
         Paragraph::new(Line::from(spans)).style(row_style).render(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,
         );
+    }
+
+    if let Some((key, collapsed, width, count_str, worst_status, worst_icon)) = toggle_info {
+        let toggle_rect = Rect::new(rect.right().saturating_sub(width), rect.y, width, 1);
+        if collapsed {
+            put_text(
+                buffer,
+                toggle_rect.x,
+                toggle_rect.y,
+                1,
+                "▸",
+                Style::default().fg(palette.accent),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 1,
+                toggle_rect.y,
+                1,
+                " ",
+                Style::default(),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 2,
+                toggle_rect.y,
+                count_str.len() as u16,
+                &count_str,
+                Style::default().fg(palette.overlay0),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 2 + count_str.len() as u16,
+                toggle_rect.y,
+                1,
+                " ",
+                Style::default(),
+            );
+            put_text(
+                buffer,
+                toggle_rect.x + 3 + count_str.len() as u16,
+                toggle_rect.y,
+                1,
+                worst_icon,
+                Style::default().fg(status_color(worst_status, palette)),
+            );
+        } else {
+            put_text(
+                buffer,
+                toggle_rect.x,
+                toggle_rect.y,
+                1,
+                "▾",
+                Style::default().fg(palette.accent),
+            );
+        }
+        Some((toggle_rect, key))
+    } else {
+        None
     }
 }
 
