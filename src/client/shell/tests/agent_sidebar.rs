@@ -439,3 +439,58 @@ fn machine_prefixed_group_key_reaches_the_chevron_hit() {
     assert_eq!(pane_id, "p1");
     assert_eq!(key, "agent:remote:p1");
 }
+
+#[test]
+fn nested_continuation_rows_keep_the_two_column_text_offset() {
+    let config = ClientShellConfig::from_config(&Config::default());
+    let area = Rect::new(0, 0, 30, 4);
+    let mut buffer = Buffer::empty(area);
+
+    let two_row = |pane_id: &str, is_last_child: bool| AgentRow {
+        pane_id: pane_id.into(),
+        status: AgentStatus::Idle,
+        focused: false,
+        rows: vec![
+            vec![crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Custom("first".into()),
+                style: Default::default(),
+            }],
+            vec![crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Custom("second".into()),
+                style: Default::default(),
+            }],
+        ],
+        depth: 1,
+        collapsed: false,
+        hidden_descendants: 0,
+        worst_hidden_status: None,
+        is_last_child,
+        group_key: None,
+    };
+
+    render_agent_row(
+        &mut buffer,
+        Rect::new(0, 0, 30, 2),
+        &two_row("a", false),
+        &config,
+    );
+    render_agent_row(
+        &mut buffer,
+        Rect::new(0, 2, 30, 2),
+        &two_row("b", true),
+        &config,
+    );
+
+    let row = |y: u16| -> String {
+        (0..30)
+            .map(|x| buffer.cell((x, y)).unwrap().symbol())
+            .collect()
+    };
+
+    // A non-last child keeps the vertical connector under its branch glyph, and both
+    // continuation rows start their text two columns right of the first row.
+    assert!(row(0).starts_with("├─ first"));
+    assert!(row(1).starts_with("│    second"));
+    assert!(row(2).starts_with("└─ first"));
+    assert!(row(3).starts_with("     second"));
+}

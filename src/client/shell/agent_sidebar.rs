@@ -485,9 +485,11 @@ pub(super) fn render_agent_row(
                     "├─ "
                 }
             } else if row.is_last_child {
-                "   "
+                // Continuation rows sit two columns further in than the first row, the way
+                // flat agent rows and the Spaces panel's worktree children already do.
+                "     "
             } else {
-                "│  "
+                "│    "
             };
             vec![ratatui::text::Span::styled(
                 format!("{leading}{branch}"),
