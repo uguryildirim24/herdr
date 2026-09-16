@@ -429,7 +429,7 @@ Rules work with text-valued built-ins and custom `$name` tokens in Agent rows, `
 
 `row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. Consecutive indented worktree children remain packed as one Space group.
 
-`row_padding` adds blank terminal rows above and below each entry, independently for the Agent and Space panels. Unlike `row_gap`, padding rows belong to the entry: they share its highlight background and select it when clicked, so `row_padding = 1` gives every entry a taller highlighted block. It defaults to `0`. Each nested agent row is padded on its own, and the tree lines continue through its padding rows and `row_gap` rows. A Space worktree group is padded as one block: the parent keeps the top padding, the last child keeps the bottom padding, and no padding separates a parent from its children. Padding applies to the expanded sidebar only; the collapsed sidebar and mobile layout are unchanged.
+`row_padding` adds blank terminal rows above and below each entry, independently for the Agent and Space panels. Unlike `row_gap`, padding rows belong to the entry: they share its highlight background and select it when clicked, so `row_padding = 1` gives every entry a taller highlighted block. It defaults to `0`. A nested agent row keeps only its bottom padding, so a parent and its children sit one row apart while separate top-level groups keep the full gap, and the tree lines continue through padding rows and `row_gap` rows. A Space worktree group is padded as one block: the parent keeps the top padding, the last child keeps the bottom padding, and no padding separates a parent from its children. Padding applies to the expanded sidebar only; the collapsed sidebar and mobile layout are unchanged.
 
 Override the complete Agent layout for a known agent under `rows_by_agent`:
 
@@ -493,7 +493,7 @@ The default value is `false`. When `false`, the Agents panel renders flat. When 
 - Both agents belong to the same workspace on the same machine.
 - The parent is not the child itself.
 
-If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by two columns per depth level, clamped at depth 3.
+If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by two columns per depth level, clamped at depth 3. The tree line hangs from the parent's status mark and branches (`├─`, `╰─`) into each child's status mark. Because a child shares its parent's workspace, a child with an agent name or label shows that label where its `workspace` token would repeat the parent's workspace name, and its `agent` token is dropped.
 
 **Collapse behavior**: A parent agent row displays a chevron toggle. Clicking the chevron collapses or expands child agents. Herdr saves collapse state in client preferences under `agent:<pane_id>` (or `agent:<machine>:<pane_id>` for multi-machine setups). When collapsed:
 - The sidebar hides the entire child subtree.
@@ -502,7 +502,7 @@ If any condition is not met, the child agent remains a top-level row. If a cycle
 - The collapsed parent row displays a roll-up badge with the count of hidden descendants and one status mark. The status mark shows the most urgent status among hidden descendants (`blocked` > `working` > `done` > `idle` > `unknown`).
 - APIs such as `herdr agent list`, notifications, and attention counts continue to track all agents normally.
 
-**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. Its first column is the tree column. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark; from index 10 on, the two-digit index replaces the tree mark, the same way flat cells show it. A parent whose children are showing has `▾` in the tree column, such as `▾1●`; clicking the `▾` collapses the parent, and clicking the rest of the cell focuses the agent. A collapsed parent is followed by a roll-up cell such as `▸2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
+**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. Its first column is the tree column. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark; from index 10 on, the two-digit index replaces the tree mark, the same way flat cells show it. A parent whose children are showing has `▼` in the tree column, such as `▼1●`; clicking the `▼` collapses the parent, and clicking the rest of the cell focuses the agent. A collapsed parent is followed by a roll-up cell such as `▶2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
 
 **CLI commands**: You can set parent lineage directly from the CLI:
 

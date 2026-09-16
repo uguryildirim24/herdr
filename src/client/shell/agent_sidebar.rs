@@ -109,7 +109,7 @@ pub(super) fn render_agent_panel(
         config,
         agent_scroll,
         hits,
-        |row| row.rows.len(),
+        |row| row,
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
             if let Some(toggle) = render_padded_agent_row(buffer, rect, row, config) {
@@ -204,7 +204,7 @@ pub(super) fn render_agent_list<T>(
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
-    row_lines: impl Fn(&T) -> usize,
+    agent_row: impl Fn(&T) -> &AgentRow,
     mut render_row: impl FnMut(&mut Buffer, Rect, &T, &mut ShellHitMap),
 ) {
     let body = Rect::new(
@@ -231,12 +231,18 @@ pub(super) fn render_agent_list<T>(
         return;
     }
 
-    // `ui.sidebar.agents.row_padding` pads every agent row, nested or not, the same way
-    // `row_gap` spaces every agent row; `render_row` receives the padded rect.
-    let padding = config.agents.row_padding.saturating_mul(2);
+    // `ui.sidebar.agents.row_padding` pads every agent row the same way `row_gap` spaces
+    // every agent row, except that nested rows drop their top padding (see
+    // `agent_row_padding`); `render_row` receives the padded rect.
     let row_heights = rows
         .iter()
-        .map(|row| (row_lines(row).max(1).min(u16::MAX as usize) as u16).saturating_add(padding))
+        .map(|row| {
+            let row = agent_row(row);
+            let (top, bottom) = agent_row_padding(row, config);
+            (row.rows.len().max(1).min(u16::MAX as usize) as u16)
+                .saturating_add(top)
+                .saturating_add(bottom)
+        })
         .collect::<Vec<_>>();
     let gaps = rows
         .iter()
@@ -285,6 +291,7 @@ pub(super) fn render_agent_list<T>(
 #[allow(clippy::too_many_arguments)]
 fn build_agent_row(
     pane_id: &str,
+    parent_pane_id: Option<&str>,
     depth: usize,
     collapsed: bool,
     hidden_descendants: usize,
@@ -337,7 +344,7 @@ fn build_agent_row(
         .agent
         .as_deref()
         .and_then(crate::detect::parse_agent_label);
-    let rows = crate::ui::sidebar_agent_rows(
+    let mut rows = crate::ui::sidebar_agent_rows(
         &config.agents,
         crate::ui::AgentTokenContext {
             machine,
@@ -355,6 +362,18 @@ fn build_agent_row(
         },
         state_text,
     );
+    let parent_workspace = parent_pane_id.and_then(|parent| {
+        snapshot
+            .agents
+            .iter()
+            .find(|candidate| candidate.pane_id == parent)
+            .map(|parent| parent.workspace_id.as_str())
+    });
+    if let Some(label) =
+        agent_label.filter(|_| parent_workspace == Some(agent.workspace_id.as_str()))
+    {
+        name_nested_row_by_agent(&mut rows, label);
+    }
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
@@ -369,6 +388,27 @@ fn build_agent_row(
         tree_lines_below: tree_lines.1,
         group_key,
     })
+}
+
+/// A child in its parent's workspace would repeat the parent's workspace name, so it takes the
+/// agent label as its name instead: the workspace token shows the label and the agent token,
+/// now redundant, is dropped (with its line, if nothing else is left on it).
+fn name_nested_row_by_agent(rows: &mut Vec<Vec<crate::ui::ResolvedToken>>, label: &str) {
+    use crate::ui::ResolvedTokenKind;
+    let mut renamed = false;
+    for token in rows.iter_mut().flatten() {
+        if let ResolvedTokenKind::Workspace(name) = &mut token.kind {
+            *name = label.to_string();
+            renamed = true;
+        }
+    }
+    if !renamed {
+        return;
+    }
+    for line in rows.iter_mut() {
+        line.retain(|token| !matches!(token.kind, ResolvedTokenKind::Agent(_)));
+    }
+    rows.retain(|line| !line.is_empty());
 }
 
 /// Rows in rendered order. `collapsed_groups` is `None` for surfaces that render the agent
@@ -386,6 +426,7 @@ pub(super) fn agent_rows(
             .filter_map(|pane_id| {
                 build_agent_row(
                     &pane_id,
+                    None,
                     0,
                     false,
                     0,
@@ -405,7 +446,16 @@ pub(super) fn agent_rows(
     let last_child = super::agent_tree::last_child_flags(&tree_rows);
     let lines_below = super::agent_tree::tree_lines_below(&tree_rows);
     let mut rows = Vec::with_capacity(tree_rows.len());
+    // Visible rows come depth-first, so a row's parent is the last row seen one level up.
+    let mut ancestors: Vec<&str> = Vec::new();
     for (index, (tree_row, is_last_child)) in tree_rows.iter().zip(last_child).enumerate() {
+        ancestors.truncate(tree_row.depth);
+        let parent = tree_row
+            .depth
+            .checked_sub(1)
+            .and_then(|level| ancestors.get(level))
+            .copied();
+        ancestors.push(&tree_row.pane_id);
         let lines_above = index
             .checked_sub(1)
             .map_or(0, |previous| lines_below[previous]);
@@ -413,6 +463,7 @@ pub(super) fn agent_rows(
             .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
         if let Some(row) = build_agent_row(
             &tree_row.pane_id,
+            parent,
             tree_row.depth,
             tree_row.collapsed,
             tree_row.hidden_descendants,
@@ -437,13 +488,32 @@ pub(super) fn agent_row(
     machine: Option<&str>,
 ) -> Option<AgentRow> {
     build_agent_row(
-        pane_id, 0, false, 0, None, false, None, snapshot, config, machine,
+        pane_id,
+        None,
+        0,
+        false,
+        0,
+        None,
+        false,
+        (0, 0),
+        None,
+        snapshot,
+        config,
+        machine,
     )
 }
 
-/// Renders an agent row into a rect that includes `ui.sidebar.agents.row_padding` rows above
-/// and below. The padding rows share the row highlight and carry the tree lines that pass
-/// through them; the content lines are drawn by `render_agent_row`.
+/// Padding rows above and below an agent row. A nested row keeps only its bottom padding: the
+/// row above already ends in padding, so a parent and its children sit one row apart while
+/// separate top-level groups keep the full gap between them.
+pub(super) fn agent_row_padding(row: &AgentRow, config: &ClientShellConfig) -> (u16, u16) {
+    let padding = config.agents.row_padding;
+    (if row.depth > 0 { 0 } else { padding }, padding)
+}
+
+/// Renders an agent row into a rect that includes its `agent_row_padding` rows. The padding
+/// rows share the row highlight and carry the tree lines that pass through them; the content
+/// lines are drawn by `render_agent_row`.
 pub(super) fn render_padded_agent_row(
     buffer: &mut Buffer,
     rect: Rect,
@@ -453,20 +523,20 @@ pub(super) fn render_padded_agent_row(
     if row.focused {
         buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
     }
-    let padding = config.agents.row_padding;
-    let top = rect.y..rect.y.saturating_add(padding).min(rect.bottom());
-    let bottom = rect.bottom().saturating_sub(padding).max(top.end)..rect.bottom();
+    let padding = agent_row_padding(row, config);
+    let top = rect.y..rect.y.saturating_add(padding.0).min(rect.bottom());
+    let bottom = rect.bottom().saturating_sub(padding.1).max(top.end)..rect.bottom();
     render_tree_lines(buffer, rect, top, row.tree_lines_above, config);
     render_tree_lines(buffer, rect, bottom, row.tree_lines_below, config);
     render_agent_row(
         buffer,
-        super::sidebar::padded_content_rect(rect, (padding, padding)),
+        super::sidebar::padded_content_rect(rect, padding),
         row,
         config,
     )
 }
 
-/// Draws `│` in every indentation column set in `mask` on rows `ys`, in the connector style
+/// Draws `│` in every tree column set in `mask` on rows `ys`, in the connector style
 /// `render_agent_row` uses. Used for padding and `row_gap` rows between nested agents.
 pub(super) fn render_tree_lines(
     buffer: &mut Buffer,
@@ -481,8 +551,9 @@ pub(super) fn render_tree_lines(
     let style = Style::default().fg(config.palette.overlay0);
     for y in ys {
         for column in 0..super::agent_tree::TREE_LINE_COLUMNS {
-            if mask & (1 << column) != 0 && (column as u16) * 2 < rect.width {
-                put_text(buffer, rect.x + column as u16 * 2, y, 1, "│", style);
+            let x = tree_line_x(column + 1);
+            if mask & (1 << column) != 0 && x < rect.width {
+                put_text(buffer, rect.x + x, y, 1, "│", style);
             }
         }
     }
@@ -524,7 +595,6 @@ pub(super) fn render_agent_row(
         row.rows.clone()
     };
 
-    let clamped_depth = row.depth.min(3);
     let prefix_style = Style::default().fg(palette.overlay0);
 
     let toggle_info = if let Some(key) = row.group_key.clone() {
@@ -546,38 +616,11 @@ pub(super) fn render_agent_row(
         .map_or(0, |(_, _, w, _, _, _)| (*w).min(rect.width));
 
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
-        let mut spans = if row.depth == 0 {
-            let indent = if index == 0 { 1 } else { 3 };
-            vec![ratatui::text::Span::raw(" ".repeat(indent))]
-        } else {
-            // Ancestor columns carry the lines of ancestors that still have siblings below.
-            let leading = (1..clamped_depth)
-                .map(|column| {
-                    if row.tree_lines_below & (1 << (column - 1)) != 0 {
-                        "│ "
-                    } else {
-                        "  "
-                    }
-                })
-                .collect::<String>();
-            let branch = if index == 0 {
-                if row.is_last_child {
-                    "└─ "
-                } else {
-                    "├─ "
-                }
-            } else if row.is_last_child {
-                // Continuation rows sit two columns further in than the first row, the way
-                // flat agent rows and the Spaces panel's worktree children already do.
-                "     "
-            } else {
-                "│    "
-            };
-            vec![ratatui::text::Span::styled(
-                format!("{leading}{branch}"),
-                prefix_style,
-            )]
-        };
+        let starts_with_icon = tokens
+            .first()
+            .is_some_and(|token| matches!(token.kind, crate::ui::ResolvedTokenKind::StateIcon));
+        let prefix = tree_prefix(row, index == 0, starts_with_icon);
+        let mut spans = vec![ratatui::text::Span::styled(prefix, prefix_style)];
 
         let prefix_width = spans
             .iter()
@@ -618,8 +661,14 @@ pub(super) fn render_agent_row(
             toggle_rect.x,
             toggle_rect.y,
             right,
-            if collapsed { "▸" } else { "▾" },
-            Style::default().fg(palette.accent),
+            if collapsed { "▶" } else { "▼" },
+            // An open group already shows its tree, so its chevron stays quiet; a collapsed
+            // one hides agents and keeps the accent.
+            Style::default().fg(if collapsed {
+                palette.accent
+            } else {
+                palette.overlay0
+            }),
         );
         if collapsed {
             x = put_segment(buffer, x, toggle_rect.y, right, " ", Style::default());
@@ -645,6 +694,54 @@ pub(super) fn render_agent_row(
     } else {
         None
     }
+}
+
+/// Column of the tree line for depth `level` (1-based): directly under the status icon of the
+/// depth `level - 1` row it hangs from.
+fn tree_line_x(level: usize) -> u16 {
+    (level as u16).saturating_mul(2).saturating_sub(1)
+}
+
+/// The tree prefix of one content line. A row's icon sits at column `2 * depth + 1` and its
+/// text two columns further in; lines hang from the parent's icon, so a child's branch
+/// (`├─`/`╰─`) runs straight into its own icon, or into a space when the line has no icon:
+///
+/// ```text
+///  ● herdr
+///  │ working · coordinator
+///  ├─● reviewer
+///  │   working
+///  ╰─○ lane-a
+///    │ done
+///    ╰─● codex
+/// ```
+fn tree_prefix(row: &AgentRow, first_line: bool, starts_with_icon: bool) -> String {
+    let depth = row.depth.min(super::agent_tree::TREE_LINE_COLUMNS);
+    let line = |level: usize| row.tree_lines_below & (1 << (level - 1)) != 0;
+    let mut prefix = String::from(" ");
+    for level in 1..depth {
+        prefix.push_str(if line(level) { "│ " } else { "  " });
+    }
+    if first_line {
+        if depth > 0 {
+            prefix.push_str(if row.is_last_child {
+                "╰─"
+            } else {
+                "├─"
+            });
+            if !starts_with_icon {
+                prefix.push(' ');
+            }
+        }
+        return prefix;
+    }
+    if depth > 0 {
+        prefix.push_str(if row.is_last_child { "  " } else { "│ " });
+    }
+    // The row's own line down to its first child starts under its icon.
+    let own_child = row.depth < super::agent_tree::TREE_LINE_COLUMNS && line(row.depth + 1);
+    prefix.push_str(if own_child { "│ " } else { "  " });
+    prefix
 }
 
 fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {

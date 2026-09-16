@@ -153,13 +153,13 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
     assert_eq!(toggle_pane_id, "parent");
     assert_eq!(key, "agent:parent");
     assert_eq!(toggle_rect, Rect::new(29, 0, 1, 1));
-    assert_eq!(buffer.cell((29, 0)).unwrap().symbol(), "▾");
+    assert_eq!(buffer.cell((29, 0)).unwrap().symbol(), "▼");
 
     // Children should have no toggle
     assert!(c1_toggle.is_none());
     assert!(c2_toggle.is_none());
 
-    // Check tree treatment: child1 gets ├─ , child2 gets └─
+    // Check tree treatment: child1 gets ├─ , child2 gets ╰─
     let row1_text: String = (0..30)
         .map(|x| buffer.cell((x, 1)).unwrap().symbol())
         .collect();
@@ -167,7 +167,9 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         .map(|x| buffer.cell((x, 2)).unwrap().symbol())
         .collect();
     assert!(row1_text.contains("├─ "));
-    assert!(row2_text.contains("└─ "));
+    assert!(row2_text.contains("╰─ "));
+    // An open group's chevron is quiet; the tree already shows the group.
+    assert_eq!(buffer.cell((29, 0)).unwrap().fg, config.palette.overlay0);
 }
 
 #[test]
@@ -205,7 +207,7 @@ fn collapsed_parent_shows_badge_and_worst_status() {
     let badge_text: String = (toggle_rect.x..toggle_rect.right())
         .map(|x| buffer.cell((x, 0)).unwrap().symbol())
         .collect();
-    assert_eq!(badge_text, "▸ 2 ●");
+    assert_eq!(badge_text, "▶ 2 ●");
 
     // Worst status mark should have blocked color (red)
     let icon_cell = buffer.cell((toggle_rect.right() - 1, 0)).unwrap();
@@ -265,7 +267,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         .map(|x| buffer.cell((x, 1)).unwrap().symbol())
         .collect();
     assert_eq!(d3_prefix, d4_prefix);
-    assert!(d3_prefix.starts_with("    ├─ "));
+    assert!(d3_prefix.starts_with("     ├─ "));
 }
 
 #[test]
@@ -501,11 +503,12 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
             .collect()
     };
 
-    // A non-last child keeps the vertical connector under its branch glyph, and both
-    // continuation rows start their text two columns right of the first row.
-    assert!(row(0).starts_with("├─ first"));
-    assert!(row(1).starts_with("│    second"));
-    assert!(row(2).starts_with("└─ first"));
+    // A non-last child keeps the vertical connector under its branch glyph, which hangs from
+    // the parent's icon column, and continuation rows start their text where a child's name
+    // starts after its icon.
+    assert!(row(0).starts_with(" ├─ first"));
+    assert!(row(1).starts_with(" │   second"));
+    assert!(row(2).starts_with(" ╰─ first"));
     assert!(row(3).starts_with("     second"));
 }
 
@@ -598,10 +601,10 @@ fn compact_sidebar_nests_children_after_their_parent_with_tree_marks() {
     let (buffer, hits) = render_compact(&snapshot, &config, &HashSet::new(), area);
 
     let y = COMPACT_AGENT_Y;
-    // A parent with visible children puts the `▾` collapse toggle in the tree column.
+    // A parent with visible children puts the `▼` collapse toggle in the tree column.
     assert_eq!(
         compact_line(&buffer, y, 3),
-        format!("▾1{}", icon(AgentStatus::Working))
+        format!("▼1{}", icon(AgentStatus::Working))
     );
     assert_eq!(buffer[(0, y)].fg, config.palette.accent);
     assert_eq!(
@@ -656,7 +659,7 @@ fn compact_sidebar_collapsed_parent_hides_children_behind_a_roll_up_cell() {
     );
     assert_eq!(
         compact_line(&buffer, y + 1, 3),
-        format!("▸2{}", icon(AgentStatus::Blocked))
+        format!("▶2{}", icon(AgentStatus::Blocked))
     );
     assert_eq!(
         buffer[(2, y + 1)].fg,
@@ -704,7 +707,7 @@ fn compact_sidebar_roll_up_count_stays_one_column_past_nine() {
     assert_eq!(
         compact_line(&buffer, COMPACT_AGENT_Y + 1, 3),
         format!(
-            "▸+{}",
+            "▶+{}",
             status_icon(AgentStatus::Working, config.status_indicators)
         )
     );
@@ -780,10 +783,10 @@ fn compact_sidebar_clamps_marks_and_roll_up_to_narrow_widths() {
 
     let collapsed: HashSet<String> = ["agent:p1".to_string()].into_iter().collect();
     let (buffer, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 3, 20));
-    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 2), "▸2");
+    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 2), "▶2");
     assert_eq!(hits.agent_group_toggles[0].0.width, 2);
     let (buffer, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 2, 20));
-    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 1), "▸");
+    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 1), "▶");
     assert_eq!(hits.agent_group_toggles[0].0.width, 1);
     let (_, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 1, 20));
     assert!(hits.agent_group_toggles.is_empty());
@@ -807,7 +810,7 @@ fn compact_sidebar_marks_deeper_levels_by_their_own_siblings() {
         .map(|line| buffer[(0, COMPACT_AGENT_Y + line)].symbol().to_string())
         .collect::<Vec<_>>();
     // c1 is itself a parent with a visible child, so it shows the collapse toggle.
-    assert_eq!(marks, vec!["▾", "▾", "└", "└"]);
+    assert_eq!(marks, vec!["▼", "▼", "└", "└"]);
 }
 
 #[test]
@@ -896,7 +899,7 @@ fn compact_sidebar_collapse_marker_toggles_the_shared_group_state() {
         )]
     );
 
-    // `▾` collapses through the same `collapsed_groups` key the expanded panel uses.
+    // `▼` collapses through the same `collapsed_groups` key the expanded panel uses.
     let outcome = compact_click(&mut state, 0, parent_y);
     assert!(outcome.actions.is_empty(), "the toggle must not focus");
     assert!(state.collapsed_groups.contains("agent:p1"));
@@ -981,4 +984,64 @@ fn compact_sidebar_numbers_children_past_nine_like_flat_cells() {
         assert_eq!(line, compact_line(&flat_buffer, y, 3));
     }
     assert_eq!(hits.agents.len(), 12);
+}
+
+#[test]
+fn child_in_its_parents_workspace_is_named_by_its_agent_label() {
+    let mut snapshot = snapshot();
+    let mut other_workspace = snapshot.workspaces[0].clone();
+    other_workspace.workspace_id = "ws_2".into();
+    other_workspace.label = "elsewhere".into();
+    snapshot.workspaces.push(other_workspace);
+    let mut remote_child = tree_agent("c2", AgentStatus::Idle, 3, Some("p1"));
+    remote_child.workspace_id = "ws_2".into();
+    snapshot.agents = vec![
+        tree_agent("p1", AgentStatus::Working, 1, None),
+        tree_agent("c1", AgentStatus::Done, 2, Some("p1")),
+        remote_child,
+    ];
+    let parsed: Config = toml::from_str(
+        r#"
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace"], ["state_text", "agent"]]
+"#,
+    )
+    .expect("agent rows config");
+    let mut config = ClientShellConfig::from_config(&parsed);
+    config.agent_parent_nesting = true;
+
+    let rows = agent_rows(&snapshot, &config, Some(&HashSet::new()), None);
+    let texts = |row: &AgentRow| {
+        row.rows
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .filter_map(|token| match &token.kind {
+                        crate::ui::ResolvedTokenKind::Workspace(text)
+                        | crate::ui::ResolvedTokenKind::StateText(text)
+                        | crate::ui::ResolvedTokenKind::Agent(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let workspace = snapshot.workspaces[0].label.clone();
+    assert_eq!(
+        texts(&rows[0]),
+        [vec![workspace], vec!["working".into(), "p1".into()]]
+    );
+    // Same workspace as the parent: the agent label replaces the repeated workspace name.
+    assert_eq!(
+        texts(&rows[1]),
+        [vec!["c1".to_string()], vec!["done".into()]]
+    );
+    // A child in another workspace does not nest, so it keeps its workspace name.
+    assert_eq!(
+        texts(&rows[2]),
+        [
+            vec!["elsewhere".to_string()],
+            vec!["idle".into(), "c2".into()]
+        ]
+    );
 }

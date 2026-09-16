@@ -70,7 +70,7 @@ pub(super) fn render_expanded(
         config,
         agent_scroll,
         hits,
-        |row| row.agent.rows.len(),
+        |row| &row.agent,
         |buffer, rect, row, hits| {
             // Flat rows never produce a chevron target.
             let _ = super::agent_sidebar::render_padded_agent_row(buffer, rect, &row.agent, config);
