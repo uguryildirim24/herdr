@@ -211,9 +211,27 @@ pub(super) fn render_expanded(
             .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
     );
     hits.workspace_body = body;
+    // Same worktree-group padding rule as the local Spaces panel: a group is padded as one
+    // block. Endpoint header rows are never padded.
+    let paddings = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| match row {
+            Row::Endpoint(_) => (0, 0),
+            Row::Workspace { entry, .. } => super::sidebar::space_entry_padding(
+                entry.indented,
+                matches!(
+                    rows.get(index + 1),
+                    Some(Row::Workspace { entry: next, .. }) if next.indented
+                ),
+                config.spaces.row_padding,
+            ),
+        })
+        .collect::<Vec<_>>();
     let row_heights = rows
         .iter()
-        .map(|row| match row {
+        .zip(&paddings)
+        .map(|(row, (top, bottom))| match row {
             Row::Endpoint(_) => 1,
             Row::Workspace { endpoint, entry } => state.endpoints[*endpoint]
                 .snapshot
@@ -230,7 +248,9 @@ pub(super) fn render_expanded(
                     .max(1)
                     .min(u16::MAX as usize) as u16
                 })
-                .unwrap_or(1),
+                .unwrap_or(1)
+                .saturating_add(*top)
+                .saturating_add(*bottom),
         })
         .collect::<Vec<_>>();
     let gaps = vec![0; rows.len()];
@@ -248,7 +268,7 @@ pub(super) fn render_expanded(
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
     let mut y = body.y;
-    for row in rows.iter().skip(*state.workspace_scroll) {
+    for (row_position, row) in rows.iter().enumerate().skip(*state.workspace_scroll) {
         match row {
             Row::Endpoint(index) => {
                 if y >= body.bottom() {
@@ -286,7 +306,7 @@ pub(super) fn render_expanded(
                     entry.indented,
                     &config.spaces,
                 );
-                let height = (tokens.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
+                let height = row_heights[row_position].min(body.height);
                 if y.saturating_add(height) > body.bottom() {
                     break;
                 }
@@ -298,9 +318,13 @@ pub(super) fn render_expanded(
                     rect.height,
                 );
                 let endpoint_active = &endpoint.endpoint_id == state.active_endpoint_id;
+                if endpoint_active && workspace.focused {
+                    // Padding rows carry the highlight; content rows are repainted below.
+                    buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
+                }
                 super::sidebar::render_workspace_rows(
                     buffer,
-                    nested,
+                    super::sidebar::padded_content_rect(nested, paddings[row_position]),
                     workspace,
                     workspace.agent_status,
                     config.status_indicators,

@@ -1055,6 +1055,12 @@
           "description": "Blank terminal rows between expanded Agent sidebar entries. Set to 1 to restore the previous spacing."
         },
         {
+          "key": "ui.sidebar.agents.row_padding",
+          "type": "integer",
+          "default": "0",
+          "description": "Blank terminal rows above and below each expanded Agent sidebar entry, inside its highlight and click target. Nested agent rows are padded individually. Unlike row_gap, padding rows share the focused row background."
+        },
+        {
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"machine\", \"workspace\", \"tab\"], [\"agent\"]]",
@@ -1071,6 +1077,12 @@
           "type": "integer",
           "default": "0",
           "description": "Blank terminal rows between worktree groups and unrelated top-level Spaces. Worktree parents and their indented children remain packed."
+        },
+        {
+          "key": "ui.sidebar.spaces.row_padding",
+          "type": "integer",
+          "default": "0",
+          "description": "Blank terminal rows above and below each expanded Space sidebar entry, inside its highlight and click target. A worktree group is padded as one block: the parent keeps the top padding, the last child keeps the bottom padding, and nothing separates a parent from its children."
         },
         {
           "key": "ui.sidebar.spaces.rows",

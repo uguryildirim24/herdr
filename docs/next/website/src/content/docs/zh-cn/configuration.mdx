@@ -351,6 +351,7 @@ status_indicators = "symbols"
 ```toml
 [ui.sidebar.agents]
 row_gap = 0
+row_padding = 0
 rows = [
   ["state_icon", "machine", "workspace", "tab"],
   ["agent"],
@@ -358,6 +359,7 @@ rows = [
 
 [ui.sidebar.spaces]
 row_gap = 0
+row_padding = 0
 rows = [
   ["state_icon", "workspace"],
   ["branch", "git_status"],
@@ -420,6 +422,8 @@ rows = [
 规则适用于 Agent 行、`rows_by_agent` 覆盖和 Space 行中的文本值内置 token 及自定义 `$name` token。上例中，`$load` 报告 `"90"` 时显示红色粗体，`"60"` 时显示黄色，`"90%"` 时保持白色。未报告的 token 仍然不显示。`state_icon` 和复合 token `git_status` 仅接受固定样式，不支持规则。未知条件或格式错误的规则会在加载配置时被拒绝；不支持正则表达式、模糊匹配或脚本。
 
 `row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
+
+`row_padding` 分别控制 Agent 和 Space 面板中每个条目上方和下方添加的空白终端行数。与 `row_gap` 不同，填充行属于条目本身：它们共享条目的高亮背景，点击时也会选中该条目，因此 `row_padding = 1` 会让每个条目成为更高的高亮块。默认值为 `0`。嵌套的 Agent 行会各自单独填充。Space 的 worktree 组作为一个整体填充：父项保留上方填充，最后一个子项保留下方填充，父项与子项之间不添加填充。填充只作用于展开的侧边栏，折叠侧边栏和移动端布局不受影响。
 
 在 `rows_by_agent` 下为已知智能体覆盖完整的 Agent 布局：
 
