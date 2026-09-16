@@ -4,6 +4,7 @@
 //! - `actions.rs` — state mutations (testable without PTYs/async)
 
 pub(crate) mod actions;
+mod agent_parents;
 mod agent_resume;
 pub(crate) mod agent_view;
 mod agents;
@@ -147,6 +148,10 @@ pub struct App {
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
     window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
+    /// `[experimental] agent_parent_notify`: prompt parents about blocked or gone children.
+    pub(crate) agent_parent_notify: bool,
+    pub(crate) agent_parent_links:
+        std::collections::HashMap<crate::terminal::TerminalId, agent_parents::AgentParentLink>,
     /// Last render-loop attempt, including a throttled hidden-only PTY skip.
     pub(crate) last_render_at: Option<Instant>,
     /// Last attempt that could update a connected presentation surface.
@@ -607,6 +612,8 @@ impl App {
             next_tab_bar_datetime_refresh: None,
             window_title_template: None,
             persist_pane_history: config.experimental.pane_history,
+            agent_parent_notify: config.experimental.agent_parent_notify,
+            agent_parent_links: std::collections::HashMap::new(),
             last_render_at: None,
             last_presentation_at: None,
             api_rx,
@@ -874,6 +881,10 @@ impl App {
             self.state.cjk_ime_cursor_shape =
                 config.experimental.cjk_ime_cursor_shape.to_decscusr();
             self.persist_pane_history = config.experimental.pane_history;
+            self.agent_parent_notify = config.experimental.agent_parent_notify;
+            if !self.agent_parent_notify {
+                self.agent_parent_links.clear();
+            }
             if !self.persist_pane_history {
                 crate::persist::clear_history();
             }

@@ -1498,6 +1498,12 @@
           "description": "Nest agent rows under orchestrator parents in the sidebar."
         },
         {
+          "key": "experimental.agent_parent_notify",
+          "type": "boolean",
+          "default": "false",
+          "description": "Prompt a parent agent with BLOCKED <child> or GONE <child> when a nested child agent blocks, exits, or closes."
+        },
+        {
           "key": "experimental.pane_history",
           "type": "boolean",
           "default": "false",
