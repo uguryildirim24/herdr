@@ -785,3 +785,40 @@ fn compact_sidebar_marks_deeper_levels_by_their_own_siblings() {
         .collect::<Vec<_>>();
     assert_eq!(marks, vec!["1", "├", "└", "└"]);
 }
+
+#[test]
+fn compact_sidebar_ignores_row_padding_with_nesting() {
+    let snapshot = compact_nesting_snapshot();
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let collapsed: HashSet<String> = ["agent:p1".to_string()].into_iter().collect();
+    let area = Rect::new(0, 0, 4, 20);
+
+    for groups in [HashSet::new(), collapsed] {
+        let (plain_buffer, plain_hits) = render_compact(&snapshot, &config, &groups, area);
+        let mut padded = ClientShellConfig::from_config(&Config::default());
+        padded.agent_parent_nesting = true;
+        padded.agents.row_padding = 2;
+        padded.spaces.row_padding = 2;
+        let (padded_buffer, padded_hits) = render_compact(&snapshot, &padded, &groups, area);
+
+        assert_eq!(padded_buffer, plain_buffer);
+        assert_eq!(padded_hits.agents, plain_hits.agents);
+        assert_eq!(
+            padded_hits
+                .workspaces
+                .iter()
+                .map(|hit| hit.rect)
+                .collect::<Vec<_>>(),
+            plain_hits
+                .workspaces
+                .iter()
+                .map(|hit| hit.rect)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            padded_hits.agent_group_toggles,
+            plain_hits.agent_group_toggles
+        );
+    }
+}
