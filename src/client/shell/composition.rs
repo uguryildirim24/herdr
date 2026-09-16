@@ -255,7 +255,17 @@ impl ClientShellState {
                 &self.config.palette,
             )
         };
-        if mode_bar == Some(layout.tab_bar) {
+        let mode_bar_covers_tab_bar = mode_bar.is_some() && mode_bar_area == layout.tab_bar;
+        if mode_bar_covers_tab_bar {
+            // A padded bottom tab bar is taller than the one-row mode bar; blank the rows
+            // above it so no tab stays visible or clickable while the mode bar owns the area.
+            let blank = Style::default().bg(self.config.palette.panel_bg);
+            for y in layout.tab_bar.top()..layout.tab_bar.bottom().saturating_sub(1) {
+                for x in layout.tab_bar.left()..layout.tab_bar.right() {
+                    buffer[(x, y)].reset();
+                    buffer[(x, y)].set_style(blank);
+                }
+            }
             self.hits.tabs.clear();
             self.hits.new_tab = Rect::default();
             self.hits.tab_scroll_left = Rect::default();

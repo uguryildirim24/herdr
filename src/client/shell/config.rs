@@ -103,6 +103,8 @@ impl ClientShellConfig {
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             mobile_width_threshold: config.ui.mobile_width_threshold,
             tab_bar_position: config.ui.tab_bar_position,
+            tab_bar_padding_y: config.ui.tab_bar_padding_y(),
+            tab_bar_padding_x: config.ui.tab_bar_padding_x,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             spaces: config.ui.sidebar.spaces.clone(),
             agents: config.ui.sidebar.agents.clone(),
@@ -300,12 +302,15 @@ impl ClientShellConfig {
             } else {
                 let ui = &config.ui;
                 diagnostics.extend(ui.sound.diagnostics());
+                diagnostics.extend(ui.tab_bar_padding_diagnostics());
                 self.sidebar_width = ui.sidebar_width;
                 self.sidebar_min_width = ui.sidebar_min_width;
                 self.sidebar_max_width = ui.sidebar_max_width;
                 self.sidebar_collapsed_mode = ui.sidebar_collapsed_mode;
                 self.mobile_width_threshold = ui.mobile_width_threshold;
                 self.tab_bar_position = ui.tab_bar_position;
+                self.tab_bar_padding_y = ui.tab_bar_padding_y();
+                self.tab_bar_padding_x = ui.tab_bar_padding_x;
                 self.hide_tab_bar_when_single_tab = ui.hide_tab_bar_when_single_tab;
                 self.spaces = ui.sidebar.spaces.clone();
                 self.agents = ui.sidebar.agents.clone();
@@ -376,7 +381,15 @@ impl ClientShellConfig {
         .min(cols.saturating_sub(1));
         let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
         let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
-        let tab_height = u16::from(show_tab_bar);
+        // Padding rows are dropped on terminals too short to keep a pane row below them.
+        let padded_tab_height = self.tab_bar_padding_y.saturating_mul(2).saturating_add(1);
+        let tab_height = if !show_tab_bar {
+            0
+        } else if rows > padded_tab_height {
+            padded_tab_height
+        } else {
+            1
+        };
         let (tab_bar, pane_surface) = match self.tab_bar_position {
             TabBarPositionConfig::Top => (
                 Rect::new(main.x, 0, main.width, tab_height),
@@ -475,6 +488,33 @@ mod tests {
             shell.keybinds.prefix,
             (KeyCode::Char('a'), KeyModifiers::CONTROL)
         );
+    }
+
+    #[test]
+    fn live_reload_applies_tab_bar_padding_and_resizes_surface() {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let before = state.surface_size(106, 30);
+        assert_eq!(state.layout(106, 30).tab_bar.height, 1);
+
+        let mut next = Config::default();
+        next.ui.tab_bar_padding_y = 1;
+        next.ui.tab_bar_padding_x = 3;
+        let diagnostics = state.config.apply_live_config(&next, &[], &[]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.config.tab_bar_padding_x, 3);
+        let after = state.surface_size(106, 30);
+        assert_eq!(after.cols, before.cols);
+        assert_eq!(after.rows, before.rows - 2);
+
+        next.ui.tab_bar_padding_y = 5;
+        let diagnostics = state.config.apply_live_config(&next, &[], &[]);
+        assert_eq!(state.config.tab_bar_padding_y, 1);
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("ui.tab_bar_padding_y")));
+
+        state.config.apply_live_config(&Config::default(), &[], &[]);
+        assert_eq!(state.surface_size(106, 30), before);
     }
 
     #[test]
