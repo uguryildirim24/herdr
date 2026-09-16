@@ -223,3 +223,4 @@ mod mouse;
 mod mouse_selection;
 mod popup_focus_projection;
 mod startup_overlays;
+mod tab_bar_padding;

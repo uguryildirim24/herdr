@@ -1,6 +1,7 @@
 use super::*;
 
-pub(super) const MIN_TAB_WIDTH: u16 = 8;
+/// Narrowest tab label area; a tab is at least this plus its horizontal padding.
+pub(super) const MIN_TAB_LABEL_WIDTH: u16 = 4;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 
@@ -76,6 +77,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) sidebar_collapsed_mode: SidebarCollapsedModeConfig,
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
+    pub(super) tab_bar_padding_y: u16,
+    pub(super) tab_bar_padding_x: u16,
     pub(super) hide_tab_bar_when_single_tab: bool,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
