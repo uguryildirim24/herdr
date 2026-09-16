@@ -27,7 +27,7 @@ pub(super) fn render_collapsed(
         } else {
             (index + 1).to_string()
         };
-        let marker = if collapsed { "▸" } else { "▾" };
+        let marker = if collapsed { "▶" } else { "▼" };
         put_text(
             buffer,
             rect.x,
@@ -288,7 +288,7 @@ pub(super) fn render_expanded(
                 let endpoint = &state.endpoints[*index];
                 let rect = Rect::new(body.x, y, content_width, 1);
                 let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
-                let marker = if collapsed { "▸" } else { "▾" };
+                let marker = if collapsed { "▶" } else { "▼" };
                 render_endpoint_row(
                     buffer,
                     rect,

@@ -146,17 +146,17 @@ pub(crate) fn render_collapsed_sidebar(
                 } else {
                     palette.overlay0
                 });
-                // Nested cells use the first column as the tree column: `▾` on a parent whose
-                // children are showing (click it to collapse, the way `▸` on the roll-up cell
+                // Nested cells use the first column as the tree column: `▼` on a parent whose
+                // children are showing (click it to collapse, the way `▶` on the roll-up cell
                 // expands), `├`/`└` on a child. The index moves to the second column.
                 let tree_glyph = if group_key.is_some() {
-                    Some(("▾", Style::default().fg(palette.accent)))
+                    Some(("▼", Style::default().fg(palette.accent)))
                 } else {
                     tree_mark.map(|mark| (mark, Style::default().fg(palette.overlay0)))
                 };
                 match tree_glyph {
                     // A child past 9 shows its two-digit index like a flat cell, in place of
-                    // the tree mark. A parent keeps `▾`, its only collapse affordance here.
+                    // the tree mark. A parent keeps `▼`, its only collapse affordance here.
                     Some(_) if agent_index >= 10 && group_key.is_none() => put_text(
                         buffer,
                         rect.x,
@@ -217,14 +217,14 @@ pub(crate) fn render_collapsed_sidebar(
                 hidden_descendants,
                 worst_hidden_status,
             } => {
-                // The compact form of the expanded roll-up badge `▸ N ●`: chevron, count
+                // The compact form of the expanded roll-up badge `▶ N ●`: chevron, count
                 // (`+` past 9 so it stays one column), and the worst hidden status.
                 put_text(
                     buffer,
                     rect.x,
                     rect.y,
                     rect.width.min(1),
-                    "▸",
+                    "▶",
                     Style::default().fg(palette.accent),
                 );
                 let count = if hidden_descendants < 10 {
@@ -286,7 +286,7 @@ enum CollapsedAgentCell {
         /// `├` or `└` for nested rows; `None` for top-level rows.
         tree_mark: Option<&'static str>,
         /// `collapsed_groups` key when this is a parent whose children are visible, so the
-        /// cell draws the `▾` collapse toggle.
+        /// cell draws the `▼` collapse toggle.
         group_key: Option<String>,
     },
     /// Stands in for the hidden subtree of the collapsed parent directly above it.
@@ -504,9 +504,9 @@ pub(crate) fn render_sidebar(
                 rect.y,
                 rect.width,
                 if state.collapsed_groups.contains(&key) {
-                    "▸"
+                    "▶"
                 } else {
-                    "▾"
+                    "▼"
                 },
                 Style::default().fg(palette.accent),
             );

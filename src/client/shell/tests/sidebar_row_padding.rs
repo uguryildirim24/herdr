@@ -191,7 +191,7 @@ fn padded_worktree_group_is_padded_as_one_block() {
 
     let (toggle, _) = parent.group_toggle.as_ref().expect("group chevron");
     assert_eq!(toggle.y, parent.rect.y + 1);
-    assert_eq!(buffer[(toggle.x, toggle.y)].symbol(), "▾");
+    assert_eq!(buffer[(toggle.x, toggle.y)].symbol(), "▼");
 }
 
 #[test]
@@ -247,13 +247,16 @@ fn padded_nested_agent_rows_extend_highlight_and_hit_target() {
     let (child, child_id) = state.hits.agents[1].clone();
     assert_eq!((parent_id.as_str(), child_id.as_str()), ("p1", "p2"));
     assert_eq!(parent.height, 2 + 2);
-    assert_eq!(child.height, 2 + 2);
+    // A nested row drops its top padding (the parent's bottom padding already separates them),
+    // and a child in its parent's workspace is named by its agent label, so the default second
+    // line holding that label goes away.
+    assert_eq!(child.height, 1 + 1);
     assert_eq!(child.y, parent.bottom());
     assert!(row_has_bg(&buffer, parent, parent.y, active));
     assert!(row_has_bg(&buffer, parent, parent.bottom() - 1, active));
     assert!(row_text(&buffer, parent, parent.y).trim().is_empty());
     assert!(row_text(&buffer, parent, parent.y + 2).contains("p1"));
-    assert!(row_text(&buffer, child, child.y + 1).contains("└─"));
+    assert!(row_text(&buffer, child, child.y).contains("╰─"));
     assert!(!row_has_bg(&buffer, child, child.y, active));
 
     let (toggle, pane_id, _) = &state.hits.agent_group_toggles[0];
@@ -402,9 +405,9 @@ fn agent_hit(state: &ClientShellState, pane_id: &str) -> Rect {
         .expect("agent hit")
 }
 
-/// The tree column glyphs (columns 0, 2 and 4) on row `y`.
+/// The tree column glyphs (columns 1, 3 and 5, under the icons of depth 0, 1 and 2) on row `y`.
 fn tree_columns(buffer: &Buffer, x: u16, y: u16) -> [String; 3] {
-    [0, 2, 4].map(|offset| buffer[(x + offset, y)].symbol().to_string())
+    [1, 3, 5].map(|offset| buffer[(x + offset, y)].symbol().to_string())
 }
 
 fn tree_line_frame(padding: u16, gap: u16) -> (ClientShellState, Buffer) {
@@ -427,29 +430,28 @@ fn padded_nested_agent_rows_keep_tree_lines_continuous() {
     let col = |y| tree_columns(&buffer, x, y);
     let s = |glyphs: [&str; 3]| glyphs.map(str::to_string);
 
-    // p1: no line above a top-level row; its bottom padding drops the line to c1.
+    // p1: no line above a top-level row; its line to c1 starts under its icon on its second
+    // content row and runs through its bottom padding.
     assert_eq!(col(p1.y), s([" ", " ", " "]));
+    assert_eq!(col(p1.y + 2)[0], "│");
     assert_eq!(col(p1.bottom() - 1), s(["│", " ", " "]));
-    // c1: top padding connects to the parent, content row branches, bottom padding carries
-    // its own sibling line (c2 follows) and the line down to its child g1.
-    assert_eq!(col(c1.y), s(["│", " ", " "]));
-    assert_eq!(col(c1.y + 1)[0], "├");
+    // c1: no top padding; the content row branches, and its bottom padding carries its sibling
+    // line (c2 follows) and its own line down to g1.
+    assert_eq!(c1.y, p1.bottom());
+    assert_eq!(col(c1.y)[0], "├");
     assert_eq!(col(c1.bottom() - 1), s(["│", "│", " "]));
     // g1: the ancestor line of c1 runs through every row, including its content row.
-    assert_eq!(col(g1.y), s(["│", "│", " "]));
-    assert_eq!(col(g1.y + 1)[0], "│");
-    assert_eq!(col(g1.y + 1)[1], "└");
+    assert_eq!(col(g1.y), s(["│", "╰", "●"]));
     assert_eq!(col(g1.bottom() - 1), s(["│", " ", " "]));
     // c2: last child, so nothing continues below its branch.
-    assert_eq!(col(c2.y), s(["│", " ", " "]));
-    assert_eq!(col(c2.y + 1)[0], "└");
+    assert_eq!(col(c2.y)[0], "╰");
     assert_eq!(col(c2.bottom() - 1), s([" ", " ", " "]));
     assert_eq!(col(p2.y), s([" ", " ", " "]));
 
     // Connector glyphs use the existing connector colour.
     let overlay0 = state.config.palette.overlay0;
-    assert_eq!(buffer[(x, c1.bottom() - 1)].fg, overlay0);
-    assert_eq!(buffer[(x, c1.y + 1)].fg, overlay0);
+    assert_eq!(buffer[(x + 1, c1.bottom() - 1)].fg, overlay0);
+    assert_eq!(buffer[(x + 1, c1.y)].fg, overlay0);
 }
 
 #[test]
