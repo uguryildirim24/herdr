@@ -450,6 +450,9 @@ fn wait_for_resolved_agent(
                         .map(AgentWaitOutcome::Response)
                         .map(Some);
                 }
+                // Closing a tab or workspace emits no PaneClosed for the panes
+                // inside it, so probe and let a missing agent end the wait.
+                ref data if container_closed_for_agent(data, &wait.initial) => should_probe = true,
                 _ => {}
             }
         }
@@ -510,6 +513,14 @@ fn wait_for_resolved_agent(
                 .map(Some);
         }
         std::thread::sleep(CONNECTION_POLL_INTERVAL);
+    }
+}
+
+fn container_closed_for_agent(data: &EventData, agent: &crate::api::schema::AgentInfo) -> bool {
+    match data {
+        EventData::TabClosed { tab_id, .. } => *tab_id == agent.tab_id,
+        EventData::WorkspaceClosed { workspace_id, .. } => *workspace_id == agent.workspace_id,
+        _ => false,
     }
 }
 
@@ -850,5 +861,41 @@ mod tests {
         let unavailable: ErrorResponse = serde_json::from_str(&unavailable).unwrap();
         assert_eq!(unavailable.id, "wait");
         assert_eq!(unavailable.error.code, "server_unavailable");
+    }
+
+    #[test]
+    fn agent_wait_probes_when_its_tab_or_workspace_closes() {
+        let agent: crate::api::schema::AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "term_1",
+            "agent_status": "working",
+            "workspace_id": "w1",
+            "tab_id": "w1:t2",
+            "pane_id": "w1:p2",
+            "focused": false,
+            "revision": 0
+        }))
+        .unwrap();
+
+        let own_tab = EventData::TabClosed {
+            tab_id: "w1:t2".into(),
+            workspace_id: "w1".into(),
+        };
+        let other_tab = EventData::TabClosed {
+            tab_id: "w1:t3".into(),
+            workspace_id: "w1".into(),
+        };
+        let own_workspace = EventData::WorkspaceClosed {
+            workspace_id: "w1".into(),
+            workspace: None,
+        };
+        let other_workspace = EventData::WorkspaceClosed {
+            workspace_id: "w2".into(),
+            workspace: None,
+        };
+
+        assert!(container_closed_for_agent(&own_tab, &agent));
+        assert!(!container_closed_for_agent(&other_tab, &agent));
+        assert!(container_closed_for_agent(&own_workspace, &agent));
+        assert!(!container_closed_for_agent(&other_workspace, &agent));
     }
 }
