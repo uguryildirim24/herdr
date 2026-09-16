@@ -161,6 +161,35 @@ pub(super) fn last_child_flags(rows: &[AgentTreeRow]) -> Vec<bool> {
         .collect()
 }
 
+/// Indentation columns the sidebar draws tree lines in; depth is clamped to this.
+pub(super) const TREE_LINE_COLUMNS: usize = 3;
+
+/// For each visible row, the tree lines that run on below it, as a bit mask over the clamped
+/// indentation columns (bit `c - 1` for column `c`, the column a depth-`c` row's branch sits
+/// in). A line at depth `L` runs below row `i` when a later row at depth `L` follows before
+/// any row shallower than `L`: a later sibling, a later sibling of an ancestor, or, for
+/// `L = depth + 1`, the row's own first visible child. Padding and gap rows between row `i`
+/// and row `i + 1` draw exactly these lines, so the tree stays continuous.
+pub(super) fn tree_lines_below(rows: &[AgentTreeRow]) -> Vec<u8> {
+    let mut masks = vec![0u8; rows.len()];
+    // `open[L]`: a row at depth L was seen (scanning backwards) with nothing shallower since.
+    let mut open: Vec<bool> = Vec::new();
+    for (index, row) in rows.iter().enumerate().rev() {
+        masks[index] = open
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, open)| **open)
+            .fold(0u8, |mask, (level, _)| {
+                mask | 1 << (level.min(TREE_LINE_COLUMNS) - 1)
+            });
+        open.truncate(row.depth.saturating_add(1));
+        open.resize(row.depth.saturating_add(1), false);
+        open[row.depth] = true;
+    }
+    masks
+}
+
 fn detect_cycles(
     parent_of: &[Option<usize>],
     ordered_agents: &[Option<&crate::protocol::ClientShellAgent>],
@@ -746,6 +775,47 @@ mod tests {
             vec![false, false, true, true, false]
         );
         assert!(last_child_flags(&[]).is_empty());
+    }
+
+    #[test]
+    fn tree_lines_below_follow_open_branches() {
+        let ordered = ordered(&["p1", "c1", "g1", "g2", "c2", "top", "d1", "d2", "d3", "d4"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("p1", "ws_1", AgentStatus::Idle, &[]),
+                agent("c1", "ws_1", AgentStatus::Idle, &[("parent", "p1")]),
+                agent("g1", "ws_1", AgentStatus::Idle, &[("parent", "c1")]),
+                agent("g2", "ws_1", AgentStatus::Idle, &[("parent", "c1")]),
+                agent("c2", "ws_1", AgentStatus::Idle, &[("parent", "p1")]),
+                agent("top", "ws_1", AgentStatus::Idle, &[]),
+                agent("d1", "ws_1", AgentStatus::Idle, &[("parent", "top")]),
+                agent("d2", "ws_1", AgentStatus::Idle, &[("parent", "d1")]),
+                agent("d3", "ws_1", AgentStatus::Idle, &[("parent", "d2")]),
+                agent("d4", "ws_1", AgentStatus::Idle, &[("parent", "d3")]),
+            ]),
+            &HashSet::new(),
+            None,
+        );
+        let depths = rows.iter().map(|row| row.depth).collect::<Vec<_>>();
+        assert_eq!(depths, vec![0, 1, 2, 2, 1, 0, 1, 2, 3, 4]);
+
+        assert_eq!(
+            tree_lines_below(&rows),
+            vec![
+                0b001, // p1: its first child c1 hangs below
+                0b011, // c1: sibling c2 below, and its child g1
+                0b011, // g1: sibling g2, and c1's line on to c2
+                0b001, // g2: last child, only c1's line on to c2
+                0b000, // c2: last child of p1
+                0b001, // top: child d1
+                0b010, // d1: last child, but its child d2 hangs below
+                0b100, // d2 -> d3
+                0b100, // d3 -> d4, depth 4 clamps into column 3
+                0b000,
+            ]
+        );
+        assert!(tree_lines_below(&[]).is_empty());
     }
 
     #[test]

@@ -185,7 +185,12 @@ fn compact_sidebar_shares_collapse_state_with_the_agents_panel_and_focuses_child
     assert!(!state.collapsed_groups.contains("agent:p1"));
     state.compose(106, 30).expect("compact sidebar, expanded");
     assert_eq!(agent_ids(&state), vec!["p1", "c1"]);
-    assert!(state.hits.agent_group_toggles.is_empty());
+    // The expanded parent now carries the one-column `▾` collapse toggle instead.
+    let [(collapse, pane_id, key)] = &state.hits.agent_group_toggles[..] else {
+        panic!("compact sidebar should draw one collapse toggle");
+    };
+    assert_eq!((pane_id.as_str(), key.as_str()), ("p1", "agent:p1"));
+    assert_eq!((collapse.width, collapse.height), (1, 1));
 
     // Clicking the child cell focuses the child.
     let child = state

@@ -247,3 +247,27 @@ fn horizontal_padding_sets_tab_width() {
     assert_eq!(short_label(2), 8);
     assert_eq!(short_label(4), 12);
 }
+
+#[test]
+fn oversized_horizontal_padding_is_clamped_with_diagnostic() {
+    let mut config = Config::default();
+    config.ui.tab_bar_padding_x = u16::MAX;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    assert_eq!(state.config.tab_bar_padding_x, 8);
+    let mut projected = snapshot();
+    projected.tabs[0].label = "abcdefgh".into();
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("clamped tab width");
+    // label 8 + 2 * 8 padding columns
+    assert_eq!(state.hits.tabs[0].0.width, 24);
+
+    let mut next = Config::default();
+    next.ui.tab_bar_padding_x = 9;
+    let diagnostics = state.config.apply_live_config(&next, &[], &[]);
+    assert_eq!(state.config.tab_bar_padding_x, 8);
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("ui.tab_bar_padding_x")
+            && diagnostic.contains("got 9")));
+}

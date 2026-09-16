@@ -300,7 +300,7 @@ text = "#cdd6f4"
 
 在 `[ui]` 下设置 `tab_bar_position = "bottom"`，可将桌面标签栏放到终端窗格下方。Prefix、Navigate、Copy 和 Resize 模式栏会在显示期间临时替换底部标签栏。默认值为 `"top"`。
 
-在 `[ui]` 下设置 `tab_bar_padding_y = 1`，可让标签栏变为三行高，每个标签显示为实心块，活动标签以强调色填满。仅支持 `0`（默认值）和 `1`；更大的值会被限制为 `1` 并产生配置诊断。终端高度过小时会回退为单行标签栏。`tab_bar_padding_x` 设置标签文字两侧各自的列数，默认值为 `2`。移动布局会忽略这两个设置。
+在 `[ui]` 下设置 `tab_bar_padding_y = 1`，可让标签栏变为三行高，每个标签显示为实心块，活动标签以强调色填满。仅支持 `0`（默认值）和 `1`；更大的值会被限制为 `1` 并产生配置诊断。终端高度过小时会回退为单行标签栏。`tab_bar_padding_x` 设置标签文字两侧各自的列数，可取 `0` 到 `8`，默认值为 `2`；更大的值会被限制为 `8` 并产生配置诊断。移动布局会忽略这两个设置。
 
 可在标签栏右侧配置一个类似 tmux 的有序状态区：
 
@@ -425,7 +425,7 @@ rows = [
 
 `row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
 
-`row_padding` 分别控制 Agent 和 Space 面板中每个条目上方和下方添加的空白终端行数。与 `row_gap` 不同，填充行属于条目本身：它们共享条目的高亮背景，点击时也会选中该条目，因此 `row_padding = 1` 会让每个条目成为更高的高亮块。默认值为 `0`。嵌套的 Agent 行会各自单独填充。Space 的 worktree 组作为一个整体填充：父项保留上方填充，最后一个子项保留下方填充，父项与子项之间不添加填充。填充只作用于展开的侧边栏，折叠侧边栏和移动端布局不受影响。
+`row_padding` 分别控制 Agent 和 Space 面板中每个条目上方和下方添加的空白终端行数。与 `row_gap` 不同，填充行属于条目本身：它们共享条目的高亮背景，点击时也会选中该条目，因此 `row_padding = 1` 会让每个条目成为更高的高亮块。默认值为 `0`。嵌套的 Agent 行会各自单独填充，树形连线会穿过其填充行和 `row_gap` 行保持连续。Space 的 worktree 组作为一个整体填充：父项保留上方填充，最后一个子项保留下方填充，父项与子项之间不添加填充。填充只作用于展开的侧边栏，折叠侧边栏和移动端布局不受影响。
 
 在 `rows_by_agent` 下为已知智能体覆盖完整的 Agent 布局：
 
@@ -498,7 +498,7 @@ If any condition is not met, the child agent remains a top-level row. If a cycle
 - The collapsed parent row displays a roll-up badge with the count of hidden descendants and one status mark. The status mark shows the most urgent status among hidden descendants (`blocked` > `working` > `done` > `idle` > `unknown`).
 - APIs such as `herdr agent list`, notifications, and attention counts continue to track all agents normally.
 
-**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark. A collapsed parent is followed by a roll-up cell such as `▸2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
+**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. Its first column is the tree column. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark; from index 10 on, the two-digit index replaces the tree mark, the same way flat cells show it. A parent whose children are showing has `▾` in the tree column, such as `▾1●`; clicking the `▾` collapses the parent, and clicking the rest of the cell focuses the agent. A collapsed parent is followed by a roll-up cell such as `▸2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
 
 **CLI commands**: You can set parent lineage directly from the CLI:
 

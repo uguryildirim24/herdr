@@ -315,7 +315,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # with solid tab blocks; larger values are clamped to 1.
 # tab_bar_padding_y = 0
 
-# Columns on each side of a desktop tab label.
+# Columns on each side of a desktop tab label: 0 to 8; larger values are clamped to 8.
 # tab_bar_padding_x = 2
 
 # Ordered status entries at the right edge of the desktop tab bar.

@@ -321,3 +321,164 @@ fn padded_rows_apply_to_the_multi_machine_sidebar() {
     assert!(row_has_bg(&buffer, *agent_rect, agent_rect.y, active));
     assert!(row_text(&buffer, *agent_rect, agent_rect.y + 2).contains("remote-agent"));
 }
+
+#[test]
+fn row_gap_applies_to_the_multi_machine_sidebar() {
+    let multi_machine = |row_gap: u16, rows: u16| {
+        let mut config = padded_config(0, 0);
+        config.spaces.row_gap = row_gap;
+        let mut state = ClientShellState::new(config);
+        let profile = SavedSshEndpoint {
+            id: ProfileId::parse("0123456789abcdef0123456789abcdef").expect("profile id"),
+            label: "Build".into(),
+            target: "dev@build.example".into(),
+            session: "agents".into(),
+            enabled: true,
+        };
+        let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+        state.set_endpoint_catalog(&[profile]);
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+        state.set_snapshot(Box::new(workspaces(2, 1)));
+        state.set_pane_surface(surface());
+        let mut remote = workspaces(2, 1);
+        remote.boot_id = "remote-boot".into();
+        state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+        state.compose(100, rows).expect("multi-machine frame");
+        state
+    };
+
+    let state = multi_machine(1, 60);
+    let machines = state
+        .hits
+        .machines
+        .iter()
+        .map(|hit| hit.rect)
+        .collect::<Vec<_>>();
+    let spaces = state
+        .hits
+        .workspaces
+        .iter()
+        .map(|hit| hit.rect)
+        .collect::<Vec<_>>();
+    assert_eq!(machines.len(), 2);
+    assert_eq!(spaces.len(), 4);
+    // Header, space, gap, space, gap, header, space, gap, space.
+    assert_eq!(spaces[0].y, machines[0].bottom());
+    assert_eq!(spaces[1].y, spaces[0].bottom() + 1);
+    assert_eq!(machines[1].y, spaces[1].bottom() + 1);
+    assert_eq!(spaces[2].y, machines[1].bottom());
+    assert_eq!(spaces[3].y, spaces[2].bottom() + 1);
+
+    // Gap rows count toward the scroll range: 3 gaps more content than without gaps.
+    let short = |row_gap| {
+        let state = multi_machine(row_gap, 22);
+        state.hits.workspace_scroll_metrics.expect("scroll metrics")
+    };
+    let (flat, gapped) = (short(0), short(1));
+    assert!(gapped.max_offset_from_bottom > flat.max_offset_from_bottom);
+}
+
+/// p1 ├ c1 (child g1) ├ c2 └, then top-level p2: exercises sibling lines, a parent's line
+/// down to its child, ancestor lines past a grandchild, and a last child with no line.
+fn tree_line_snapshot() -> ClientShellSnapshot {
+    let mut projected = snapshot();
+    projected.agents = vec![
+        agent("p1", 1, None, false),
+        agent("c1", 2, Some("p1"), false),
+        agent("g1", 3, Some("c1"), false),
+        agent("c2", 4, Some("p1"), false),
+        agent("p2", 5, None, false),
+    ];
+    projected
+}
+
+fn agent_hit(state: &ClientShellState, pane_id: &str) -> Rect {
+    state
+        .hits
+        .agents
+        .iter()
+        .find(|(_, id)| id == pane_id)
+        .map(|(rect, _)| *rect)
+        .expect("agent hit")
+}
+
+/// The tree column glyphs (columns 0, 2 and 4) on row `y`.
+fn tree_columns(buffer: &Buffer, x: u16, y: u16) -> [String; 3] {
+    [0, 2, 4].map(|offset| buffer[(x + offset, y)].symbol().to_string())
+}
+
+fn tree_line_frame(padding: u16, gap: u16) -> (ClientShellState, Buffer) {
+    let mut config = padded_config(0, padding);
+    config.agents.row_gap = gap;
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(tree_line_snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 60).expect("tree line frame");
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    (state, buffer)
+}
+
+#[test]
+fn padded_nested_agent_rows_keep_tree_lines_continuous() {
+    let (state, buffer) = tree_line_frame(1, 0);
+    let [p1, c1, g1, c2, p2] = ["p1", "c1", "g1", "c2", "p2"].map(|id| agent_hit(&state, id));
+    let x = p1.x;
+    let col = |y| tree_columns(&buffer, x, y);
+    let s = |glyphs: [&str; 3]| glyphs.map(str::to_string);
+
+    // p1: no line above a top-level row; its bottom padding drops the line to c1.
+    assert_eq!(col(p1.y), s([" ", " ", " "]));
+    assert_eq!(col(p1.bottom() - 1), s(["│", " ", " "]));
+    // c1: top padding connects to the parent, content row branches, bottom padding carries
+    // its own sibling line (c2 follows) and the line down to its child g1.
+    assert_eq!(col(c1.y), s(["│", " ", " "]));
+    assert_eq!(col(c1.y + 1)[0], "├");
+    assert_eq!(col(c1.bottom() - 1), s(["│", "│", " "]));
+    // g1: the ancestor line of c1 runs through every row, including its content row.
+    assert_eq!(col(g1.y), s(["│", "│", " "]));
+    assert_eq!(col(g1.y + 1)[0], "│");
+    assert_eq!(col(g1.y + 1)[1], "└");
+    assert_eq!(col(g1.bottom() - 1), s(["│", " ", " "]));
+    // c2: last child, so nothing continues below its branch.
+    assert_eq!(col(c2.y), s(["│", " ", " "]));
+    assert_eq!(col(c2.y + 1)[0], "└");
+    assert_eq!(col(c2.bottom() - 1), s([" ", " ", " "]));
+    assert_eq!(col(p2.y), s([" ", " ", " "]));
+
+    // Connector glyphs use the existing connector colour.
+    let overlay0 = state.config.palette.overlay0;
+    assert_eq!(buffer[(x, c1.bottom() - 1)].fg, overlay0);
+    assert_eq!(buffer[(x, c1.y + 1)].fg, overlay0);
+}
+
+#[test]
+fn row_gap_rows_between_nested_agents_carry_tree_lines() {
+    let (state, buffer) = tree_line_frame(0, 1);
+    let [p1, c1, g1, c2, p2] = ["p1", "c1", "g1", "c2", "p2"].map(|id| agent_hit(&state, id));
+    let x = p1.x;
+    let s = |glyphs: [&str; 3]| glyphs.map(str::to_string);
+    assert_eq!(c1.y, p1.bottom() + 1);
+    assert_eq!(tree_columns(&buffer, x, p1.bottom()), s(["│", " ", " "]));
+    assert_eq!(tree_columns(&buffer, x, c1.bottom()), s(["│", "│", " "]));
+    assert_eq!(tree_columns(&buffer, x, g1.bottom()), s(["│", " ", " "]));
+    assert_eq!(tree_columns(&buffer, x, c2.bottom()), s([" ", " ", " "]));
+    assert_eq!(p2.y, c2.bottom() + 1);
+}
+
+#[test]
+fn unpadded_flat_agent_rows_draw_no_tree_lines() {
+    let mut config = padded_config(0, 1);
+    config.agents.row_gap = 1;
+    config.agent_parent_nesting = false;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(tree_line_snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 60).expect("flat frame");
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    for (rect, _) in &state.hits.agents {
+        for y in [rect.y, rect.bottom() - 1, rect.bottom()] {
+            assert!(!row_text(&buffer, *rect, y).contains('│'));
+        }
+    }
+}

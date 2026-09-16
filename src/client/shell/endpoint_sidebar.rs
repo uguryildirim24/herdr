@@ -253,7 +253,18 @@ pub(super) fn render_expanded(
                 .saturating_add(*bottom),
         })
         .collect::<Vec<_>>();
-    let gaps = vec![0; rows.len()];
+    // `ui.sidebar.spaces.row_gap` follows the local Spaces rule: a gap before every top-level
+    // row, none inside a worktree group. An endpoint header stays attached to its first
+    // workspace, and the next header is separated from the previous machine's rows.
+    let gaps = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| match (row, rows.get(index + 1)) {
+            (_, None) | (Row::Endpoint(_), _) => 0,
+            (_, Some(Row::Workspace { entry, .. })) if entry.indented => 0,
+            _ => config.spaces.row_gap,
+        })
+        .collect::<Vec<_>>();
     let metrics = super::scroll::list_scroll_metrics(
         &row_heights,
         &gaps,
@@ -290,7 +301,7 @@ pub(super) fn render_expanded(
                     rect,
                     endpoint_id: endpoint.endpoint_id.clone(),
                 });
-                y = y.saturating_add(1);
+                y = y.saturating_add(1).saturating_add(gaps[row_position]);
             }
             Row::Workspace { endpoint, entry } => {
                 let endpoint = &state.endpoints[*endpoint];
@@ -350,7 +361,7 @@ pub(super) fn render_expanded(
                     indented: entry.indented,
                     group_toggle: None,
                 });
-                y = y.saturating_add(height);
+                y = y.saturating_add(height).saturating_add(gaps[row_position]);
             }
         }
     }
