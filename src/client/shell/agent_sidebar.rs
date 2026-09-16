@@ -108,7 +108,7 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            if let Some(toggle) = render_agent_row(buffer, rect, row, config) {
+            if let Some(toggle) = render_padded_agent_row(buffer, rect, row, config) {
                 hits.agent_group_toggles.push(toggle);
             }
         },
@@ -214,9 +214,12 @@ pub(super) fn render_agent_list<T>(
         return;
     }
 
+    // `ui.sidebar.agents.row_padding` pads every agent row, nested or not, the same way
+    // `row_gap` spaces every agent row; `render_row` receives the padded rect.
+    let padding = config.agents.row_padding.saturating_mul(2);
     let row_heights = rows
         .iter()
-        .map(|row| row_lines(row).max(1).min(u16::MAX as usize) as u16)
+        .map(|row| (row_lines(row).max(1).min(u16::MAX as usize) as u16).saturating_add(padding))
         .collect::<Vec<_>>();
     let gaps = rows
         .iter()
@@ -404,6 +407,27 @@ pub(super) fn agent_rows(
         }
     }
     rows
+}
+
+/// Renders an agent row into a rect that includes `ui.sidebar.agents.row_padding` rows above
+/// and below. The padding rows share the row highlight; the content lines are drawn by
+/// `render_agent_row`.
+pub(super) fn render_padded_agent_row(
+    buffer: &mut Buffer,
+    rect: Rect,
+    row: &AgentRow,
+    config: &ClientShellConfig,
+) -> Option<(Rect, String, String)> {
+    if row.focused {
+        buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
+    }
+    let padding = config.agents.row_padding;
+    render_agent_row(
+        buffer,
+        super::sidebar::padded_content_rect(rect, (padding, padding)),
+        row,
+        config,
+    )
 }
 
 pub(super) fn render_agent_row(
