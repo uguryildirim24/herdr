@@ -425,7 +425,7 @@ rows = [
 
 `row_gap` は、Agent パネルと Space パネルごとに、エントリ間の空白行数を指定します。デフォルトは `0` で、エントリを詰めて表示します。以前の間隔に戻すには `1` に設定します。`rows` で定義したコンテンツ行の間隔には影響しません。連続するインデントされた worktree の子は、1 つの Space グループとして詰めて表示されます。
 
-`row_padding` は、Agent パネルと Space パネルごとに、各エントリの上下に追加する空白行数を指定します。`row_gap` と異なり、パディング行はエントリの一部です。ハイライトの背景を共有し、クリックするとそのエントリを選択するため、`row_padding = 1` にすると各エントリが高さのあるハイライトブロックになります。デフォルトは `0` です。ネストされた Agent 行はそれぞれ個別にパディングされ、ツリーの線はパディング行と `row_gap` の行を通って続きます。Space の worktree グループは 1 つのブロックとしてパディングされます。親は上側、最後の子は下側のパディングを持ち、親と子の間にはパディングが入りません。パディングは展開されたサイドバーにのみ適用され、折りたたんだサイドバーとモバイルレイアウトは変わりません。
+`row_padding` は、Agent パネルと Space パネルごとに、各エントリの上下に追加する空白行数を指定します。`row_gap` と異なり、パディング行はエントリの一部で、クリックするとそのエントリを選択します。Space パネルではハイライトの背景も共有するため、`row_padding = 1` にすると各 Space が高さのあるハイライトブロックになります。Agent パネルでは、フォーカス中の Agent のハイライトは内容の行だけを覆い、サイドバーの端を越えてペインまで伸びます。デフォルトは `0` です。ネストされた Agent 行はそれぞれ個別にパディングされ、ツリーの線はパディング行と `row_gap` の行を通って続きます。Space の worktree グループは 1 つのブロックとしてパディングされます。親は上側、最後の子は下側のパディングを持ち、親と子の間にはパディングが入りません。パディングは展開されたサイドバーにのみ適用され、折りたたんだサイドバーとモバイルレイアウトは変わりません。
 
 既知のエージェントについて Agent の完全なレイアウトを上書きするには、`rows_by_agent` を使います:
 
@@ -489,16 +489,16 @@ The default value is `false`. When `false`, the Agents panel renders flat. When 
 - Both agents belong to the same workspace on the same machine.
 - The parent is not the child itself.
 
-If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by two columns per depth level, clamped at depth 3.
+If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by three columns per depth level, clamped at depth 3.
 
-**Collapse behavior**: A parent agent row displays a chevron toggle. Clicking the chevron collapses or expands child agents. Herdr saves collapse state in client preferences under `agent:<pane_id>` (or `agent:<machine>:<pane_id>` for multi-machine setups). When collapsed:
+**Collapse behavior**: A parent agent's own status mark is its collapse toggle: click it to collapse or expand its child agents, or use Collapse and Expand in the agent's right-click menu. Herdr saves collapse state in client preferences under `agent:<pane_id>` (or `agent:<machine>:<pane_id>` for multi-machine setups). When collapsed:
 - The sidebar hides the entire child subtree.
 - Hidden child rows do not receive mouse clicks.
 - Hidden child rows are skipped during indexed focus jumps and next or previous agent navigation.
-- The collapsed parent row displays a roll-up badge with the count of hidden descendants and one status mark. The status mark shows the most urgent status among hidden descendants (`blocked` > `working` > `done` > `idle` > `unknown`).
+- The collapsed parent row shows a stack of status marks at its right edge, one per hidden descendant and at most five, most urgent first (`blocked` > `working` > `done` > `idle` > `unknown`). Clicking the stack expands the parent.
 - APIs such as `herdr agent list`, notifications, and attention counts continue to track all agents normally.
 
-**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. Its first column is the tree column. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark; from index 10 on, the two-digit index replaces the tree mark, the same way flat cells show it. A parent whose children are showing has `▼` in the tree column, such as `▼1●`; clicking the `▼` collapses the parent, and clicking the rest of the cell focuses the agent. A collapsed parent is followed by a roll-up cell such as `▶2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
+**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. Its first column is the tree column. A child cell shows `┣` or `┗` in its status color, its index for indices 1 to 9, and its status mark; from index 10 on, the two-digit index replaces the tree mark, the same way flat cells show it. Clicking a parent's status mark collapses or expands it, and clicking the rest of the cell focuses the agent. A collapsed parent is followed by a cell with up to three status marks of its hidden descendants, most urgent first, such as ` ●●`; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
 
 **CLI commands**: You can set parent lineage directly from the CLI:
 

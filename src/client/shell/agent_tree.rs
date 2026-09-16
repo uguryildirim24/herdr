@@ -12,8 +12,33 @@ pub(super) struct AgentTreeRow {
     pub(super) collapsed: bool,
     /// all descendants removed because this row is collapsed; 0 otherwise
     pub(super) hidden_descendants: usize,
-    /// Some only when hidden_descendants > 0
-    pub(super) worst_hidden_status: Option<crate::api::schema::AgentStatus>,
+    /// those hidden descendants counted per status; all zero unless hidden_descendants > 0
+    pub(super) hidden_status_counts: StatusCounts,
+}
+
+/// Agents counted per status, indexed by `status_severity`.
+pub(super) type StatusCounts = [usize; 5];
+
+const STATUSES_BY_SEVERITY: [crate::api::schema::AgentStatus; 5] = [
+    crate::api::schema::AgentStatus::Unknown,
+    crate::api::schema::AgentStatus::Idle,
+    crate::api::schema::AgentStatus::Done,
+    crate::api::schema::AgentStatus::Working,
+    crate::api::schema::AgentStatus::Blocked,
+];
+
+/// The dot stack a collapsed parent shows in place of its hidden descendants: one status per
+/// hidden agent, most urgent first, at most `limit` of them.
+pub(super) fn status_stack(
+    counts: &StatusCounts,
+    limit: usize,
+) -> impl Iterator<Item = crate::api::schema::AgentStatus> + '_ {
+    STATUSES_BY_SEVERITY
+        .iter()
+        .zip(counts)
+        .rev()
+        .flat_map(|(status, count)| std::iter::repeat_n(*status, *count))
+        .take(limit)
 }
 
 /// Key stored in `collapsed_groups`: `agent:<pane_id>`, or `agent:<machine>:<pane_id>` when `machine` is Some.
@@ -107,8 +132,7 @@ pub(super) fn nest_agents(
         .collect();
 
     let mut subtree_counts: Vec<Option<usize>> = vec![None; ordered.len()];
-    let mut subtree_statuses: Vec<Option<crate::api::schema::AgentStatus>> =
-        vec![None; ordered.len()];
+    let mut subtree_statuses: Vec<StatusCounts> = vec![StatusCounts::default(); ordered.len()];
     for index in 0..ordered.len() {
         aggregate_descendants(
             index,
@@ -169,25 +193,46 @@ pub(super) const TREE_LINE_COLUMNS: usize = 3;
 /// in). A line at depth `L` runs below row `i` when a later row at depth `L` follows before
 /// any row shallower than `L`: a later sibling, a later sibling of an ancestor, or, for
 /// `L = depth + 1`, the row's own first visible child. Padding and gap rows between row `i`
-/// and row `i + 1` draw exactly these lines, so the tree stays continuous.
+/// and row `i + 1` draw exactly these lines, so the tree stays continuous. The sidebar derives
+/// the same masks from `tree_line_targets_below`, which it also needs for line colors.
+#[cfg(test)]
 pub(super) fn tree_lines_below(rows: &[AgentTreeRow]) -> Vec<u8> {
-    let mut masks = vec![0u8; rows.len()];
-    // `open[L]`: a row at depth L was seen (scanning backwards) with nothing shallower since.
-    let mut open: Vec<bool> = Vec::new();
+    tree_line_targets_below(rows)
+        .iter()
+        .map(tree_line_mask)
+        .collect()
+}
+
+/// The `tree_lines_below` bit mask of one row's line targets.
+pub(super) fn tree_line_mask(targets: &[Option<usize>; TREE_LINE_COLUMNS]) -> u8 {
+    targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| target.is_some())
+        .fold(0u8, |mask, (column, _)| mask | 1 << column)
+}
+
+/// For each visible row, the index of the row each line in `tree_lines_below` leads to, per
+/// indentation column: the next row at that line's depth. A line takes that row's status
+/// color. Where clamping folds several depths into the last column, the deepest line wins.
+pub(super) fn tree_line_targets_below(
+    rows: &[AgentTreeRow],
+) -> Vec<[Option<usize>; TREE_LINE_COLUMNS]> {
+    let mut targets = vec![[None; TREE_LINE_COLUMNS]; rows.len()];
+    // `open[L]`: the nearest later row at depth L, with nothing shallower since (scanning
+    // backwards).
+    let mut open: Vec<Option<usize>> = Vec::new();
     for (index, row) in rows.iter().enumerate().rev() {
-        masks[index] = open
-            .iter()
-            .enumerate()
-            .skip(1)
-            .filter(|(_, open)| **open)
-            .fold(0u8, |mask, (level, _)| {
-                mask | 1 << (level.min(TREE_LINE_COLUMNS) - 1)
-            });
+        for (level, target) in open.iter().enumerate().skip(1) {
+            if let Some(target) = target {
+                targets[index][level.min(TREE_LINE_COLUMNS) - 1] = Some(*target);
+            }
+        }
         open.truncate(row.depth.saturating_add(1));
-        open.resize(row.depth.saturating_add(1), false);
-        open[row.depth] = true;
+        open.resize(row.depth.saturating_add(1), None);
+        open[row.depth] = Some(index);
     }
-    masks
+    targets
 }
 
 fn detect_cycles(
@@ -240,7 +285,7 @@ fn aggregate_descendants(
     statuses: &[Option<crate::api::schema::AgentStatus>],
     children: &[Vec<usize>],
     subtree_counts: &mut [Option<usize>],
-    subtree_statuses: &mut [Option<crate::api::schema::AgentStatus>],
+    subtree_statuses: &mut [StatusCounts],
 ) {
     if subtree_counts[root].is_some() {
         return;
@@ -252,36 +297,21 @@ fn aggregate_descendants(
     };
 
     let mut count = 0usize;
-    let mut hidden = None;
+    let mut hidden = StatusCounts::default();
     for &child in &children[root] {
         aggregate_descendants(child, statuses, children, subtree_counts, subtree_statuses);
         if let Some(child_status) = statuses[child] {
             count += 1;
             count += subtree_counts[child].unwrap_or(0);
-            hidden = worse_status(hidden, Some(child_status));
-            hidden = worse_status(hidden, subtree_statuses[child]);
+            hidden[usize::from(status_severity(child_status))] += 1;
+            for (total, below) in hidden.iter_mut().zip(subtree_statuses[child]) {
+                *total += below;
+            }
         }
     }
 
     subtree_counts[root] = Some(count);
     subtree_statuses[root] = hidden;
-}
-
-fn worse_status(
-    left: Option<crate::api::schema::AgentStatus>,
-    right: Option<crate::api::schema::AgentStatus>,
-) -> Option<crate::api::schema::AgentStatus> {
-    match (left, right) {
-        (None, status) => status,
-        (Some(left), None) => Some(left),
-        (Some(left), Some(right)) => {
-            if status_severity(right) > status_severity(left) {
-                Some(right)
-            } else {
-                Some(left)
-            }
-        }
-    }
 }
 
 fn emit_tree_rows(
@@ -292,7 +322,7 @@ fn emit_tree_rows(
     collapsed_groups: &HashSet<String>,
     machine: Option<&str>,
     subtree_counts: &[Option<usize>],
-    subtree_statuses: &[Option<crate::api::schema::AgentStatus>],
+    subtree_statuses: &[StatusCounts],
     rows: &mut Vec<AgentTreeRow>,
 ) {
     let mut stack = Vec::new();
@@ -307,10 +337,10 @@ fn emit_tree_rows(
         } else {
             0
         };
-        let worst_hidden_status = if collapsed {
-            subtree_statuses[row_index].filter(|_| hidden_descendants > 0)
+        let hidden_status_counts = if collapsed {
+            subtree_statuses[row_index]
         } else {
-            None
+            StatusCounts::default()
         };
 
         rows.push(AgentTreeRow {
@@ -319,7 +349,7 @@ fn emit_tree_rows(
             child_count,
             collapsed,
             hidden_descendants,
-            worst_hidden_status,
+            hidden_status_counts,
         });
 
         if collapsed {
@@ -618,11 +648,14 @@ mod tests {
         );
         assert!(rows[0].collapsed);
         assert_eq!(rows[0].hidden_descendants, 1);
-        assert_eq!(rows[0].worst_hidden_status, Some(AgentStatus::Blocked));
+        assert_eq!(
+            status_stack(&rows[0].hidden_status_counts, 1).next(),
+            Some(AgentStatus::Blocked)
+        );
     }
 
     #[test]
-    fn worst_hidden_status_spans_every_hidden_branch() {
+    fn hidden_status_stack_spans_every_hidden_branch_most_urgent_first() {
         let ordered = ordered(&["parent", "a", "a_child", "b"]);
         let rows = nest_agents(
             &ordered,
@@ -640,7 +673,14 @@ mod tests {
         assert_eq!(rows[0].child_count, 2);
         assert_eq!(rows[0].hidden_descendants, 3);
         // Working beats Done and Idle, and the parent's own Blocked status is not rolled up.
-        assert_eq!(rows[0].worst_hidden_status, Some(AgentStatus::Working));
+        assert_eq!(
+            status_stack(&rows[0].hidden_status_counts, 5).collect::<Vec<_>>(),
+            vec![AgentStatus::Working, AgentStatus::Done, AgentStatus::Idle]
+        );
+        assert_eq!(
+            status_stack(&rows[0].hidden_status_counts, 2).collect::<Vec<_>>(),
+            vec![AgentStatus::Working, AgentStatus::Done]
+        );
     }
 
     #[test]
@@ -716,7 +756,10 @@ mod tests {
         assert_eq!(rows[0].depth, 0);
         assert_eq!(rows[0].child_count, 1);
         assert_eq!(rows[0].hidden_descendants, 2);
-        assert_eq!(rows[0].worst_hidden_status, Some(AgentStatus::Blocked));
+        assert_eq!(
+            status_stack(&rows[0].hidden_status_counts, 1).next(),
+            Some(AgentStatus::Blocked)
+        );
     }
 
     #[test]
@@ -751,7 +794,10 @@ mod tests {
         assert!(rows[1].collapsed);
         assert_eq!(rows[1].child_count, 1);
         assert_eq!(rows[1].hidden_descendants, 1);
-        assert_eq!(rows[1].worst_hidden_status, Some(AgentStatus::Blocked));
+        assert_eq!(
+            status_stack(&rows[1].hidden_status_counts, 1).next(),
+            Some(AgentStatus::Blocked)
+        );
     }
 
     #[test]
