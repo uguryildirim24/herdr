@@ -421,6 +421,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # allow_nested = false
 # Nest agent rows under orchestrator parents in the sidebar.
 # agent_parent_nesting = false
+# Prompt a parent agent with "BLOCKED <child>" or "GONE <child>" when a nested
+# child agent blocks, exits, or closes.
+# agent_parent_notify = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to

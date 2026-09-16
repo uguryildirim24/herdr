@@ -1044,6 +1044,9 @@ pub struct ExperimentalConfig {
     pub allow_nested: bool,
     /// Nest agent rows under orchestrator parents in the sidebar. Default: false.
     pub agent_parent_nesting: bool,
+    /// Prompt a parent agent with `BLOCKED <child>` / `GONE <child>` when a
+    /// nested child agent blocks, exits, or closes. Default: false.
+    pub agent_parent_notify: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.

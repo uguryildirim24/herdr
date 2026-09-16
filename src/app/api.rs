@@ -747,6 +747,7 @@ impl App {
 
     pub(super) fn emit_event(&mut self, event: crate::api::schema::EventEnvelope) {
         self.run_plugin_event_hooks(&event);
+        self.notify_agent_parents(&event);
         self.event_hub.push(event);
     }
 

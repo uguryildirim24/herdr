@@ -108,7 +108,7 @@ impl App {
         true
     }
 
-    fn queue_agent_prompt(
+    pub(in crate::app) fn queue_agent_prompt(
         &mut self,
         id: String,
         params: AgentPromptParams,
