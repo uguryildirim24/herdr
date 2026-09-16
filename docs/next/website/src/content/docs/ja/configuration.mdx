@@ -498,6 +498,8 @@ If any condition is not met, the child agent remains a top-level row. If a cycle
 - The collapsed parent row displays a roll-up badge with the count of hidden descendants and one status mark. The status mark shows the most urgent status among hidden descendants (`blocked` > `working` > `done` > `idle` > `unknown`).
 - APIs such as `herdr agent list`, notifications, and attention counts continue to track all agents normally.
 
+**Collapsed sidebar**: With a single machine, the collapsed (compact) sidebar uses the same nested order and the same collapse state. A child cell shows `├` or `└`, its index for indices 1 to 9, and its status mark. A collapsed parent is followed by a roll-up cell such as `▸2●` with the hidden descendant count (`+` past 9) and the most urgent hidden status; clicking it expands the parent. The multi-machine collapsed sidebar and the mobile layout stay flat.
+
 **CLI commands**: You can set parent lineage directly from the CLI:
 
 ```bash
