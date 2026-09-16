@@ -353,6 +353,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [ui.sidebar.agents]
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
+# Blank rows above and below each agent entry, inside its highlight and click target.
+# row_padding = 0
 # rows = [["state_icon", "machine", "workspace", "tab"], ["agent"]]
 # Optional canonical agent IDs replace the default rows for matching agents.
 # [ui.sidebar.agents.rows_by_agent]
@@ -364,6 +366,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [ui.sidebar.spaces]
 # Blank rows between space entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
+# Blank rows above and below each space entry, inside its highlight and click target.
+# A worktree group is padded as one block.
+# row_padding = 0
 # rows = [["state_icon", "workspace"], ["branch", "git_status"]]
 
 # Background notification popup delivery

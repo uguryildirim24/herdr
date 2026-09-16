@@ -281,9 +281,27 @@ pub(super) fn render_expanded(
             .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
     );
     hits.workspace_body = body;
+    // Same worktree-group padding rule as the local Spaces panel: a group is padded as one
+    // block. Endpoint header rows are never padded.
+    let paddings = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| match row {
+            Row::Endpoint(_) => (0, 0),
+            Row::Workspace { entry, .. } => super::sidebar::space_entry_padding(
+                entry.indented,
+                matches!(
+                    rows.get(index + 1),
+                    Some(Row::Workspace { entry: next, .. }) if next.indented
+                ),
+                config.spaces.row_padding,
+            ),
+        })
+        .collect::<Vec<_>>();
     let row_heights = rows
         .iter()
-        .map(|row| match row {
+        .zip(&paddings)
+        .map(|(row, (top, bottom))| match row {
             Row::Endpoint(_) => 1,
             Row::Workspace { endpoint, entry } => {
                 let endpoint = &state.endpoints[*endpoint];
@@ -311,6 +329,8 @@ pub(super) fn render_expanded(
                         )
                     })
                     .unwrap_or(1)
+                    .saturating_add(*top)
+                    .saturating_add(*bottom)
             }
         })
         .collect::<Vec<_>>();
@@ -431,7 +451,7 @@ pub(super) fn render_expanded(
                     entry.indented,
                     &config.spaces,
                 );
-                let height = (tokens.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
+                let height = row_heights[row_index].min(body.height);
                 if y.saturating_add(height) > body.bottom() {
                     break;
                 }
@@ -446,9 +466,13 @@ pub(super) fn render_expanded(
                 let selected = state.selected_workspace_id.is_some_and(|target| {
                     target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
                 });
+                if endpoint_active && workspace.focused {
+                    // Padding rows carry the highlight; content rows are repainted below.
+                    buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
+                }
                 super::sidebar::render_workspace_rows(
                     buffer,
-                    nested,
+                    super::sidebar::padded_content_rect(nested, paddings[row_index]),
                     workspace,
                     status,
                     config.status_indicators,

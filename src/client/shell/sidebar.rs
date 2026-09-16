@@ -220,9 +220,21 @@ pub(crate) fn render_sidebar(
             .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
     );
     hits.workspace_body = body;
+    let paddings = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            space_entry_padding(
+                entry.indented,
+                entries.get(index + 1).is_some_and(|next| next.indented),
+                config.spaces.row_padding,
+            )
+        })
+        .collect::<Vec<_>>();
     let row_heights = entries
         .iter()
-        .map(|entry| {
+        .zip(&paddings)
+        .map(|(entry, (top, bottom))| {
             snapshot
                 .workspaces
                 .get(entry.index)
@@ -238,6 +250,8 @@ pub(crate) fn render_sidebar(
                     .min(u16::MAX as usize) as u16
                 })
                 .unwrap_or(1)
+                .saturating_add(*top)
+                .saturating_add(*bottom)
         })
         .collect::<Vec<_>>();
     let gaps = entries
@@ -289,11 +303,15 @@ pub(crate) fn render_sidebar(
         };
         let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
         let rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
-        let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
+        // Heights and gaps come from the same vectors the scroll metrics used, so the draw
+        // loop cannot drift from the scroll model.
+        let row_height = row_heights[entry_position].min(body.height);
         if y.saturating_add(row_height) > body.bottom() {
             break;
         }
+        // `rect` is the whole padded entry: highlight and hit target. Text goes in `content`.
         let rect = Rect::new(body.x, y, content_width, row_height);
+        let content = padded_content_rect(rect, paddings[entry_position]);
         let selected = state.selected_workspace_id.is_some_and(|target| {
             target.matches(state.active_endpoint_id, &workspace.workspace_id)
         });
@@ -307,7 +325,7 @@ pub(crate) fn render_sidebar(
         }
         render_workspace_rows(
             buffer,
-            rect,
+            content,
             workspace,
             status,
             config.status_indicators,
@@ -320,7 +338,7 @@ pub(crate) fn render_sidebar(
         );
         let group_toggle = render_parent_group_toggle(
             buffer,
-            rect,
+            content,
             snapshot,
             entry.index,
             state.collapsed_groups,
@@ -333,10 +351,9 @@ pub(crate) fn render_sidebar(
             indented: entry.indented,
             group_toggle,
         });
-        let gap = entries
-            .get(entry_position + 1)
-            .map_or(0, |next| u16::from(!next.indented) * config.spaces.row_gap);
-        y = y.saturating_add(row_height + gap);
+        y = y
+            .saturating_add(row_height)
+            .saturating_add(gaps[entry_position]);
     }
 
     if show_scrollbar {
@@ -606,6 +623,36 @@ pub(in crate::client::shell) fn displayed_workspace_status(
         .map(|candidate| candidate.agent_status)
         .max_by_key(|status| status_priority(*status))
         .unwrap_or(workspace.agent_status)
+}
+
+/// Blank rows `(above, below)` a Spaces entry for `ui.sidebar.spaces.row_padding`.
+///
+/// A worktree group is padded as one block, the same way `row_gap` already skips indented
+/// children: the parent gets the top padding, the last visible child gets the bottom
+/// padding, and nothing separates a parent from its indented children.
+pub(in crate::client::shell) fn space_entry_padding(
+    indented: bool,
+    next_indented: bool,
+    padding: u16,
+) -> (u16, u16) {
+    (
+        if indented { 0 } else { padding },
+        if next_indented { 0 } else { padding },
+    )
+}
+
+/// The content lines of a padded row: `rect` minus `(top, bottom)` padding rows. When a
+/// row is clamped to a body shorter than its padding, padding gives way so at least one
+/// content line stays visible.
+pub(in crate::client::shell) fn padded_content_rect(rect: Rect, (top, bottom): (u16, u16)) -> Rect {
+    let top = top.min(rect.height.saturating_sub(1));
+    let bottom = bottom.min(rect.height.saturating_sub(top).saturating_sub(1));
+    Rect::new(
+        rect.x,
+        rect.y.saturating_add(top),
+        rect.width,
+        rect.height.saturating_sub(top).saturating_sub(bottom),
+    )
 }
 
 pub(in crate::client::shell) fn workspace_rows(

@@ -260,5 +260,6 @@ mod mobile;
 mod mouse;
 mod mouse_selection;
 mod popup_focus_projection;
+mod sidebar_row_padding;
 mod startup_overlays;
 mod tab_bar_padding;

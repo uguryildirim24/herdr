@@ -11,6 +11,7 @@ use crate::detect::Agent;
 const MAX_SIDEBAR_ROWS: usize = 16;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
+const DEFAULT_SIDEBAR_ROW_PADDING: u16 = 0;
 
 fn deserialize_sidebar_rows<'de, D, T>(deserializer: D) -> Result<Vec<Vec<T>>, D::Error>
 where
@@ -427,6 +428,8 @@ pub struct AgentsSidebarConfig {
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
+    /// Blank rows above and below each entry, inside its highlight and hit area.
+    pub row_padding: u16,
 }
 
 impl AgentsSidebarConfig {
@@ -451,6 +454,7 @@ impl Default for AgentsSidebarConfig {
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            row_padding: DEFAULT_SIDEBAR_ROW_PADDING,
         }
     }
 }
@@ -461,6 +465,9 @@ pub struct SpacesSidebarConfig {
     #[serde(deserialize_with = "deserialize_sidebar_rows")]
     pub rows: SpaceSidebarRows,
     pub row_gap: u16,
+    /// Blank rows above and below each entry, inside its highlight and hit area.
+    /// Worktree children stay packed against their parent; see the Spaces renderer.
+    pub row_padding: u16,
 }
 
 impl Default for SpacesSidebarConfig {
@@ -471,6 +478,7 @@ impl Default for SpacesSidebarConfig {
                 vec![SpaceSidebarToken::Branch, SpaceSidebarToken::GitStatus],
             ],
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            row_padding: DEFAULT_SIDEBAR_ROW_PADDING,
         }
     }
 }
@@ -503,6 +511,7 @@ mod tests {
         );
         assert!(config.agents.rows_by_agent.is_empty());
         assert_eq!(config.agents.row_gap, 0);
+        assert_eq!(config.agents.row_padding, 0);
         assert_eq!(
             config.spaces.rows,
             vec![
@@ -511,6 +520,7 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+        assert_eq!(config.spaces.row_padding, 0);
     }
 
     #[test]
@@ -520,6 +530,7 @@ mod tests {
 [ui.sidebar.agents]
 rows = [["state_icon", "workspace"], ["state_text", "agent", "$summary"], ["terminal_title", "terminal_title_stripped", "$terminal_title"]]
 row_gap = 1
+row_padding = 2
 
 [ui.sidebar.agents.rows_by_agent]
 claude = [["terminal_title_stripped"], ["agent", "$model"]]
@@ -527,6 +538,7 @@ claude = [["terminal_title_stripped"], ["agent", "$model"]]
 [ui.sidebar.spaces]
 rows = [["workspace"], ["$jj_status"]]
 row_gap = 3
+row_padding = 1
 "#,
         )
         .expect("sidebar token config");
@@ -558,11 +570,13 @@ row_gap = 3
             ]
         );
         assert_eq!(config.ui.sidebar.agents.row_gap, 1);
+        assert_eq!(config.ui.sidebar.agents.row_padding, 2);
         assert_eq!(
             config.ui.sidebar.spaces.rows[1],
             vec![SpaceSidebarToken::Custom("jj_status".into())]
         );
         assert_eq!(config.ui.sidebar.spaces.row_gap, 3);
+        assert_eq!(config.ui.sidebar.spaces.row_padding, 1);
     }
 
     #[test]
