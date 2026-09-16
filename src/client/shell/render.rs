@@ -271,6 +271,7 @@ pub(super) fn render_shell(
                 layout.sidebar,
                 snapshot,
                 config,
+                state.collapsed_groups,
                 state.selected_workspace_id,
                 &mut hits,
             );

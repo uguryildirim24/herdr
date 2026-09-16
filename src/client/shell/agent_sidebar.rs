@@ -369,23 +369,9 @@ pub(super) fn agent_rows(
     };
 
     let tree_rows = super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine);
+    let last_child = super::agent_tree::last_child_flags(&tree_rows);
     let mut rows = Vec::with_capacity(tree_rows.len());
-    for (i, tree_row) in tree_rows.iter().enumerate() {
-        let is_last_child = if tree_row.depth == 0 {
-            false
-        } else {
-            let mut last = true;
-            for next in &tree_rows[i + 1..] {
-                if next.depth == tree_row.depth {
-                    last = false;
-                    break;
-                }
-                if next.depth < tree_row.depth {
-                    break;
-                }
-            }
-            last
-        };
+    for (tree_row, is_last_child) in tree_rows.iter().zip(last_child) {
         let group_key = (tree_row.child_count > 0)
             .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
         if let Some(row) = build_agent_row(

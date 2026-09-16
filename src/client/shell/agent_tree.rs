@@ -145,6 +145,22 @@ pub(super) fn nest_agents(
     rows
 }
 
+/// For each visible row, whether it is the last child of its parent among the visible rows.
+/// Top-level rows are never a last child. Shared by the expanded and collapsed sidebars so
+/// both draw the same tree marks.
+pub(super) fn last_child_flags(rows: &[AgentTreeRow]) -> Vec<bool> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            row.depth > 0
+                && rows[index + 1..]
+                    .iter()
+                    .find(|next| next.depth <= row.depth)
+                    .is_none_or(|next| next.depth < row.depth)
+        })
+        .collect()
+}
+
 fn detect_cycles(
     parent_of: &[Option<usize>],
     ordered_agents: &[Option<&crate::protocol::ClientShellAgent>],
@@ -707,6 +723,29 @@ mod tests {
         assert_eq!(rows[1].child_count, 1);
         assert_eq!(rows[1].hidden_descendants, 1);
         assert_eq!(rows[1].worst_hidden_status, Some(AgentStatus::Blocked));
+    }
+
+    #[test]
+    fn last_child_flags_follow_siblings_at_each_depth() {
+        let ordered = ordered(&["p1", "c1", "g1", "c2", "top"]);
+        let rows = nest_agents(
+            &ordered,
+            &snapshot(vec![
+                agent("p1", "ws_1", AgentStatus::Idle, &[]),
+                agent("c1", "ws_1", AgentStatus::Idle, &[("parent", "p1")]),
+                agent("g1", "ws_1", AgentStatus::Idle, &[("parent", "c1")]),
+                agent("c2", "ws_1", AgentStatus::Idle, &[("parent", "p1")]),
+                agent("top", "ws_1", AgentStatus::Idle, &[]),
+            ]),
+            &HashSet::new(),
+            None,
+        );
+
+        assert_eq!(
+            last_child_flags(&rows),
+            vec![false, false, true, true, false]
+        );
+        assert!(last_child_flags(&[]).is_empty());
     }
 
     #[test]
