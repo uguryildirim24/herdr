@@ -2136,9 +2136,13 @@ impl TerminalState {
     pub fn border_label(&self, show_agent_labels: bool) -> Option<String> {
         self.effective_title().or_else(|| {
             self.manual_label.clone().or_else(|| {
+                // An agent's name (`herdr agent rename`, `--name`) is what the sidebar calls it,
+                // so the border uses it before the detected agent kind.
                 show_agent_labels
                     .then(|| {
-                        self.effective_display_agent()
+                        self.agent_name
+                            .clone()
+                            .or_else(|| self.effective_display_agent())
                             .or_else(|| self.effective_agent_label().map(str::to_string))
                     })
                     .flatten()
@@ -3953,6 +3957,19 @@ mod tests {
         terminal.set_manual_label("reviewer".into());
         terminal.clear_manual_label();
         assert_eq!(terminal.border_label(true).as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn border_label_uses_agent_name_before_agent_kind() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.set_agent_name("author".into());
+
+        assert_eq!(terminal.border_label(false), None);
+        assert_eq!(terminal.border_label(true).as_deref(), Some("author"));
+
+        terminal.set_manual_label("reviewer".into());
+        assert_eq!(terminal.border_label(true).as_deref(), Some("reviewer"));
     }
 
     #[test]

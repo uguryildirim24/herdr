@@ -985,7 +985,7 @@
           "key": "ui.show_agent_labels_on_pane_borders",
           "type": "boolean",
           "default": "false",
-          "description": "Show agent labels in split pane borders when no manual pane label is set."
+          "description": "Show agent labels in split pane borders when no manual pane label is set. A named agent shows its name; an unnamed one shows its agent kind."
         },
         {
           "key": "ui.hide_tab_bar_when_single_tab",
