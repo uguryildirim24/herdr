@@ -29,6 +29,7 @@ pub(crate) fn render_collapsed_sidebar(
     area: Rect,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
     selected_workspace_id: Option<&str>,
     hits: &mut ShellHitMap,
 ) {
@@ -111,48 +112,119 @@ pub(crate) fn render_collapsed_sidebar(
         detail_area.width,
         detail_area.height.saturating_sub(1),
     );
-    for (index, pane_id) in super::ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
+    let mut agent_index = 0usize;
+    for (line, cell) in collapsed_agent_cells(snapshot, config, collapsed_groups)
         .into_iter()
         .take(detail_content.height as usize)
         .enumerate()
     {
-        let Some(agent) = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.pane_id == pane_id)
-        else {
-            continue;
-        };
         let rect = Rect::new(
             detail_content.x,
-            detail_content.y + index as u16,
+            detail_content.y + line as u16,
             detail_content.width,
             1,
         );
-        if agent.focused {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+        match cell {
+            CollapsedAgentCell::Agent { pane_id, tree_mark } => {
+                let Some(agent) = snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == pane_id)
+                else {
+                    continue;
+                };
+                agent_index += 1;
+                if agent.focused {
+                    buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+                }
+                let number_style = Style::default().fg(if agent.focused {
+                    palette.text
+                } else {
+                    palette.overlay0
+                });
+                if let Some(mark) = tree_mark {
+                    // Children trade the number's first column for the tree mark and keep
+                    // the single-digit index that indexed focus jumps use.
+                    put_text(
+                        buffer,
+                        rect.x,
+                        rect.y,
+                        rect.width.min(1),
+                        mark,
+                        Style::default().fg(palette.overlay0),
+                    );
+                    if agent_index < 10 {
+                        put_text(
+                            buffer,
+                            rect.x.saturating_add(1),
+                            rect.y,
+                            rect.width.saturating_sub(1).min(1),
+                            &agent_index.to_string(),
+                            number_style,
+                        );
+                    }
+                } else {
+                    put_text(
+                        buffer,
+                        rect.x,
+                        rect.y,
+                        rect.width.min(2),
+                        &format!("{agent_index:<2}"),
+                        number_style,
+                    );
+                }
+                put_text(
+                    buffer,
+                    rect.x.saturating_add(2),
+                    rect.y,
+                    rect.width.saturating_sub(2),
+                    status_icon(agent.agent_status, config.status_indicators),
+                    Style::default().fg(status_color(agent.agent_status, palette)),
+                );
+                hits.agents.push((rect, pane_id));
+            }
+            CollapsedAgentCell::RollUp {
+                pane_id,
+                group_key,
+                hidden_descendants,
+                worst_hidden_status,
+            } => {
+                // The compact form of the expanded roll-up badge `▸ N ●`: chevron, count
+                // (`+` past 9 so it stays one column), and the worst hidden status.
+                put_text(
+                    buffer,
+                    rect.x,
+                    rect.y,
+                    rect.width.min(1),
+                    "▸",
+                    Style::default().fg(palette.accent),
+                );
+                let count = if hidden_descendants < 10 {
+                    hidden_descendants.to_string()
+                } else {
+                    "+".to_owned()
+                };
+                put_text(
+                    buffer,
+                    rect.x.saturating_add(1),
+                    rect.y,
+                    rect.width.saturating_sub(1).min(1),
+                    &count,
+                    Style::default().fg(palette.overlay0),
+                );
+                put_text(
+                    buffer,
+                    rect.x.saturating_add(2),
+                    rect.y,
+                    rect.width.saturating_sub(2),
+                    status_icon(worst_hidden_status, config.status_indicators),
+                    Style::default().fg(status_color(worst_hidden_status, palette)),
+                );
+                if !rect.is_empty() {
+                    hits.agent_group_toggles.push((rect, pane_id, group_key));
+                }
+            }
         }
-        put_text(
-            buffer,
-            rect.x,
-            rect.y,
-            rect.width.min(2),
-            &format!("{:<2}", index + 1),
-            Style::default().fg(if agent.focused {
-                palette.text
-            } else {
-                palette.overlay0
-            }),
-        );
-        put_text(
-            buffer,
-            rect.x.saturating_add(2),
-            rect.y,
-            rect.width.saturating_sub(2),
-            status_icon(agent.agent_status, config.status_indicators),
-            Style::default().fg(status_color(agent.agent_status, palette)),
-        );
-        hits.agents.push((rect, pane_id));
     }
     hits.sidebar_toggle = if area.is_empty() || workspace_area.width == 0 {
         Rect::default()
@@ -178,6 +250,61 @@ pub(crate) fn render_collapsed_sidebar(
             Style::default().fg(palette.overlay0)
         },
     );
+}
+
+enum CollapsedAgentCell {
+    Agent {
+        pane_id: String,
+        /// `├` or `└` for nested rows; `None` for top-level rows.
+        tree_mark: Option<&'static str>,
+    },
+    /// Stands in for the hidden subtree of the collapsed parent directly above it.
+    RollUp {
+        pane_id: String,
+        group_key: String,
+        hidden_descendants: usize,
+        worst_hidden_status: crate::api::schema::AgentStatus,
+    },
+}
+
+/// One-column cells for the collapsed sidebar's agent list, in the same order and with the
+/// same `collapsed_groups` state as the expanded Agents panel.
+fn collapsed_agent_cells(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
+) -> Vec<CollapsedAgentCell> {
+    let ordered = super::ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return ordered
+            .into_iter()
+            .map(|pane_id| CollapsedAgentCell::Agent {
+                pane_id,
+                tree_mark: None,
+            })
+            .collect();
+    }
+    let tree_rows =
+        super::super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, None);
+    let last_child = super::super::agent_tree::last_child_flags(&tree_rows);
+    let mut cells = Vec::with_capacity(tree_rows.len());
+    for (row, is_last_child) in tree_rows.into_iter().zip(last_child) {
+        let roll_up = row
+            .worst_hidden_status
+            .filter(|_| row.collapsed && row.hidden_descendants > 0)
+            .map(|worst_hidden_status| CollapsedAgentCell::RollUp {
+                pane_id: row.pane_id.clone(),
+                group_key: super::super::agent_tree::agent_group_key(None, &row.pane_id),
+                hidden_descendants: row.hidden_descendants,
+                worst_hidden_status,
+            });
+        cells.push(CollapsedAgentCell::Agent {
+            pane_id: row.pane_id,
+            tree_mark: (row.depth > 0).then_some(if is_last_child { "└" } else { "├" }),
+        });
+        cells.extend(roll_up);
+    }
+    cells
 }
 
 pub(crate) fn render_sidebar(
