@@ -1004,6 +1004,18 @@
           ]
         },
         {
+          "key": "ui.tab_bar_padding_y",
+          "type": "integer",
+          "default": "0",
+          "description": "Blank rows above and below desktop tab labels. Accepts 0 or 1; 1 makes a three-row tab bar with solid tab blocks. Larger values are clamped to 1 with a config diagnostic."
+        },
+        {
+          "key": "ui.tab_bar_padding_x",
+          "type": "integer",
+          "default": "2",
+          "description": "Columns on each side of a desktop tab label."
+        },
+        {
           "key": "ui.tab_bar_right",
           "type": "array",
           "default": "[]",

@@ -304,6 +304,8 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
+Set `tab_bar_padding_y = 1` under `[ui]` for a taller three-row tab bar where each tab is a solid block and the active tab is filled with the accent color. Only `0` (the default) and `1` are supported; larger values are clamped to `1` with a config diagnostic. Very short terminals fall back to a one-row tab bar. `tab_bar_padding_x` sets the columns on each side of a tab label and defaults to `2`. The mobile layout ignores both settings.
+
 Configure an ordered tmux-style status area at the right edge of the tab row:
 
 ```toml

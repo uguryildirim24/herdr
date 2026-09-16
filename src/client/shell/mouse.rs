@@ -470,7 +470,7 @@ impl ClientShellState {
             .collect::<Vec<_>>();
         let (first_index, first_rect) = *visible.first()?;
         let (last_index, last_rect) = *visible.last()?;
-        let on_tab_row = point.1 == first_rect.y;
+        let on_tab_row = point.1 >= first_rect.y && point.1 < first_rect.bottom();
         if !on_tab_row {
             return None;
         }

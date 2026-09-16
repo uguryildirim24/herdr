@@ -948,6 +948,10 @@ pub struct UiConfig {
     pub hide_tab_bar_when_single_tab: bool,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
+    /// Blank rows above and below the desktop tab labels, from 0 to 1. Default: 0.
+    pub tab_bar_padding_y: u16,
+    /// Columns on each side of a desktop tab label. Default: 2.
+    pub tab_bar_padding_x: u16,
     /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
     pub tab_bar_right: Vec<TabBarRightEntryConfig>,
     /// Text inserted between visible right-side tab bar entries. Default: one space.
@@ -1182,6 +1186,8 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
+            tab_bar_padding_y: 0,
+            tab_bar_padding_x: DEFAULT_TAB_BAR_PADDING_X,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
             window_title: super::window_title::default_window_title(),
@@ -1196,7 +1202,24 @@ impl Default for UiConfig {
     }
 }
 
+pub(crate) const MAX_TAB_BAR_PADDING_Y: u16 = 1;
+pub(crate) const DEFAULT_TAB_BAR_PADDING_X: u16 = 2;
+
 impl UiConfig {
+    /// Vertical tab bar padding clamped to the supported range.
+    pub fn tab_bar_padding_y(&self) -> u16 {
+        self.tab_bar_padding_y.min(MAX_TAB_BAR_PADDING_Y)
+    }
+
+    pub fn tab_bar_padding_diagnostics(&self) -> Option<String> {
+        (self.tab_bar_padding_y > MAX_TAB_BAR_PADDING_Y).then(|| {
+            format!(
+                "ui.tab_bar_padding_y must be between 0 and {MAX_TAB_BAR_PADDING_Y} (got {}); using {MAX_TAB_BAR_PADDING_Y}",
+                self.tab_bar_padding_y
+            )
+        })
+    }
+
     pub fn mouse_scroll_lines(&self) -> usize {
         self.mouse_scroll_lines
             .map(NonZeroUsize::get)
@@ -1489,6 +1512,9 @@ status_indicators = "symbols"
         );
         assert!(default_config.ui.tab_bar_right.is_empty());
         assert_eq!(default_config.ui.tab_bar_right_separator, " ");
+        assert_eq!(default_config.ui.tab_bar_padding_y(), 0);
+        assert_eq!(default_config.ui.tab_bar_padding_x, 2);
+        assert!(default_config.ui.tab_bar_padding_diagnostics().is_none());
 
         let toml = r#"
 [ui]
@@ -1522,6 +1548,26 @@ tab_bar_right_separator = " · "
             TabBarRightEntryConfig::Hostname
         ));
         assert_eq!(config.ui.tab_bar_right_separator, " · ");
+    }
+
+    #[test]
+    fn tab_bar_padding_parses_and_clamps_vertical_padding() {
+        let config: Config =
+            toml::from_str("[ui]\ntab_bar_padding_y = 1\ntab_bar_padding_x = 3\n").unwrap();
+        assert_eq!(config.ui.tab_bar_padding_y(), 1);
+        assert_eq!(config.ui.tab_bar_padding_x, 3);
+        assert!(config.ui.tab_bar_padding_diagnostics().is_none());
+        assert!(config.collect_diagnostics().is_empty());
+
+        let config: Config = toml::from_str("[ui]\ntab_bar_padding_y = 4\n").unwrap();
+        assert_eq!(config.ui.tab_bar_padding_y(), 1);
+        let diagnostic = config
+            .ui
+            .tab_bar_padding_diagnostics()
+            .expect("out-of-range padding diagnostic");
+        assert!(diagnostic.contains("ui.tab_bar_padding_y"));
+        assert!(diagnostic.contains("got 4"));
+        assert!(config.collect_diagnostics().contains(&diagnostic));
     }
 
     #[test]
