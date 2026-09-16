@@ -102,3 +102,111 @@ fn mouse_click_on_agent_chevron_toggles_collapsed_groups_and_click_elsewhere_foc
             )
     ));
 }
+
+fn compact_tree_agent(pane_id: &str, parent: Option<&str>) -> ClientShellAgent {
+    ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some(pane_id.into()),
+        display_agent: None,
+        agent: None,
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Working,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: parent
+            .map(|parent| vec![("parent".to_string(), parent.to_string())])
+            .unwrap_or_default(),
+        focused: false,
+    }
+}
+
+fn click(state: &mut ClientShellState, rect: Rect) -> ClientShellInput {
+    state.handle_raw_events(vec![
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+    ])
+}
+
+#[test]
+fn compact_sidebar_shares_collapse_state_with_the_agents_panel_and_focuses_children() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    let mut snap = snapshot();
+    snap.agents = vec![
+        compact_tree_agent("p1", None),
+        compact_tree_agent("c1", Some("p1")),
+    ];
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    let agent_ids = |state: &ClientShellState| {
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Collapse from the expanded Agents panel chevron.
+    state.compose(106, 30).expect("expanded sidebar");
+    let chevron = state.hits.agent_group_toggles[0].0;
+    click(&mut state, chevron);
+    assert!(state.collapsed_groups.contains("agent:p1"));
+
+    // The compact sidebar reads the same state: the child is hidden behind a roll-up cell.
+    state.sidebar_collapsed = true;
+    state.compose(106, 30).expect("compact sidebar");
+    assert_eq!(agent_ids(&state), vec!["p1"]);
+    let [(roll_up, pane_id, key)] = &state.hits.agent_group_toggles[..] else {
+        panic!("compact sidebar should draw one roll-up cell");
+    };
+    assert_eq!((pane_id.as_str(), key.as_str()), ("p1", "agent:p1"));
+    let roll_up = *roll_up;
+    assert!(roll_up.right() <= 3);
+
+    // Clicking the roll-up cell expands through the same collapsed_groups key.
+    let expand = click(&mut state, roll_up);
+    assert!(expand.actions.is_empty());
+    assert!(!state.collapsed_groups.contains("agent:p1"));
+    state.compose(106, 30).expect("compact sidebar, expanded");
+    assert_eq!(agent_ids(&state), vec!["p1", "c1"]);
+    assert!(state.hits.agent_group_toggles.is_empty());
+
+    // Clicking the child cell focuses the child.
+    let child = state
+        .hits
+        .agents
+        .iter()
+        .find(|(_, pane_id)| pane_id == "c1")
+        .map(|(rect, _)| *rect)
+        .expect("child cell");
+    let focus = click(&mut state, child);
+    assert!(matches!(
+        &focus.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                Method::PaneFocus(PaneTarget { pane_id }) if pane_id == "c1"
+            )
+    ));
+
+    // And the expanded panel shows the subtree again.
+    state.sidebar_collapsed = false;
+    state.compose(106, 30).expect("expanded sidebar again");
+    assert_eq!(agent_ids(&state), vec!["p1", "c1"]);
+}
