@@ -606,6 +606,7 @@ pub(crate) fn render_sidebar(
         config,
         state.collapsed_groups,
         state.agent_scroll,
+        state.agent_drag,
         hits,
     );
 

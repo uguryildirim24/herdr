@@ -462,6 +462,97 @@ impl ClientShellState {
         Some(last_index + 1)
     }
 
+    /// Where dropping agent `source` at `point` would put it. An agent row in the same
+    /// workspace becomes its parent, unless that row is already its parent or descends from
+    /// it (which would make a cycle); the empty part of the Agents panel un-nests it when it
+    /// has a parent. Everywhere else is not a drop target.
+    pub(super) fn agent_drop_target_at(
+        &self,
+        source: &str,
+        point: (u16, u16),
+    ) -> Option<AgentDropTarget> {
+        let snapshot = self.snapshot.as_deref()?;
+        let agent = |pane_id: &str| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane_id)
+        };
+        let parent_of = |pane_id: &str| {
+            agent(pane_id).and_then(|agent| {
+                agent
+                    .tokens
+                    .iter()
+                    .find(|(key, _)| key == "parent")
+                    .map(|(_, value)| value.as_str())
+            })
+        };
+        let source_agent = agent(source)?;
+        if let Some((_, target)) = self
+            .hits
+            .agents
+            .iter()
+            .find(|(rect, _)| super::contains(*rect, point))
+        {
+            if agent(target)?.workspace_id != source_agent.workspace_id
+                || parent_of(source) == Some(target.as_str())
+            {
+                return None;
+            }
+            let mut ancestor = Some(target.as_str());
+            for _ in 0..=snapshot.agents.len() {
+                let Some(pane_id) = ancestor else { break };
+                if pane_id == source {
+                    return None;
+                }
+                ancestor = parent_of(pane_id);
+            }
+            return Some(AgentDropTarget::Parent(target.clone()));
+        }
+        (super::contains(self.hits.agent_body, point) && parent_of(source).is_some())
+            .then_some(AgentDropTarget::Unnest)
+    }
+
+    /// Sets or clears the dropped agent's `parent` token the way `herdr agent set-parent` does,
+    /// and opens a collapsed new parent so the moved row stays in sight.
+    fn drop_agent(
+        &mut self,
+        pane_id: String,
+        target: AgentDropTarget,
+        outcome: &mut ClientShellInput,
+    ) {
+        let parent = match target {
+            AgentDropTarget::Parent(parent) => {
+                let key = super::agent_tree::agent_group_key(None, &parent);
+                if self.collapsed_groups.remove(&key) {
+                    self.persist_chrome_preferences(outcome);
+                }
+                Some(parent)
+            }
+            AgentDropTarget::Unnest => None,
+        };
+        self.push_endpoint_method(
+            crate::api::schema::Method::PaneReportMetadata(
+                crate::api::schema::PaneReportMetadataParams {
+                    pane_id,
+                    source: "herdr:agent-set-parent".into(),
+                    agent: None,
+                    applies_to_source: None,
+                    title: None,
+                    display_agent: None,
+                    state_labels: std::collections::HashMap::new(),
+                    tokens: std::collections::HashMap::from([("parent".to_string(), parent)]),
+                    clear_title: false,
+                    clear_display_agent: false,
+                    clear_state_labels: false,
+                    seq: None,
+                    ttl_ms: None,
+                },
+            ),
+            outcome,
+        );
+    }
+
     fn workspace_drop_target_at(&self, point: (u16, u16)) -> Option<(Option<String>, u16)> {
         if self.hits.workspace_body.height == 0
             || point.1 < self.hits.workspace_body.y.saturating_sub(1)
@@ -1097,6 +1188,17 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                Some(ClientChromeDrag::Agent { pane_id, .. }) => {
+                    let target = self.agent_drop_target_at(pane_id, point);
+                    if let Some(ClientChromeDrag::Agent {
+                        target: current, ..
+                    }) = self.chrome_drag.as_mut()
+                    {
+                        *current = target;
+                    }
+                    outcome.repaint = true;
+                    return;
+                }
                 Some(ClientChromeDrag::Workspace { .. }) => {
                     let target = self.workspace_drop_target_at(point);
                     if let Some(ClientChromeDrag::Workspace {
@@ -1130,6 +1232,19 @@ impl ClientShellState {
                 }
                 return;
             }
+            if let Some(press) = self.agent_press.as_ref() {
+                let delta = mouse
+                    .column
+                    .abs_diff(press.start_column)
+                    .max(mouse.row.abs_diff(press.start_row));
+                if delta >= 1 {
+                    let pane_id = press.pane_id.clone();
+                    let target = self.agent_drop_target_at(&pane_id, point);
+                    self.chrome_drag = Some(ClientChromeDrag::Agent { pane_id, target });
+                    outcome.repaint = true;
+                }
+                return;
+            }
             if let Some(press) = self.tab_press.as_ref() {
                 let delta = mouse
                     .column
@@ -1152,6 +1267,7 @@ impl ClientShellState {
             if let Some(drag) = self.chrome_drag.take() {
                 self.workspace_press = None;
                 self.tab_press = None;
+                self.agent_press = None;
                 match drag {
                     ClientChromeDrag::Tab {
                         tab_id,
@@ -1183,6 +1299,15 @@ impl ClientShellState {
                                 ),
                                 outcome,
                             );
+                        }
+                        outcome.repaint = true;
+                    }
+                    ClientChromeDrag::Agent { pane_id, target } => {
+                        // Re-check on release: the snapshot may have changed since the last move.
+                        if let Some(target) = target.filter(|target| {
+                            self.agent_drop_target_at(&pane_id, point).as_ref() == Some(target)
+                        }) {
+                            self.drop_agent(pane_id, target, outcome);
                         }
                         outcome.repaint = true;
                     }
@@ -1263,6 +1388,15 @@ impl ClientShellState {
             }
             if let Some(press) = self.workspace_press.take() {
                 self.finish_endpoint_workspace_press(press, outcome);
+                return;
+            }
+            if let Some(press) = self.agent_press.take() {
+                self.push_endpoint_method(
+                    crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                        pane_id: press.pane_id,
+                    }),
+                    outcome,
+                );
                 return;
             }
             if let Some(press) = self.tab_press.take() {
@@ -1837,6 +1971,7 @@ impl ClientShellState {
                 let previous_pane_click = self.last_pane_click.take();
                 self.workspace_press = None;
                 self.tab_press = None;
+                self.agent_press = None;
                 self.chrome_drag = None;
                 if super::contains(self.hits.sidebar_divider, point)
                     && !super::contains(self.hits.sidebar_toggle, point)
@@ -2061,6 +2196,19 @@ impl ClientShellState {
                     .iter()
                     .find(|(rect, _)| super::contains(*rect, point))
                     .map(|(_, pane_id)| pane_id.clone());
+                // With nesting on, focus waits for release so the row can be dragged onto a
+                // parent instead; otherwise a press focuses right away, as it always has.
+                if let Some(pane_id) = agent_pane_id
+                    .as_ref()
+                    .filter(|_| self.config.agent_parent_nesting && self.config.mouse_capture)
+                {
+                    self.agent_press = Some(ClientAgentPress {
+                        pane_id: pane_id.clone(),
+                        start_column: mouse.column,
+                        start_row: mouse.row,
+                    });
+                    return;
+                }
                 if let Some(pane_id) = agent_pane_id {
                     self.push_endpoint_method(
                         crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {

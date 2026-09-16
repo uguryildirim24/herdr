@@ -78,6 +78,14 @@ pub(super) fn ordered_agent_pane_ids(
         .collect()
 }
 
+/// An agent row being dragged onto a new parent, for drawing the drag.
+#[derive(Clone, Copy)]
+pub(super) struct AgentDragView<'a> {
+    pub(super) pane_id: &'a str,
+    pub(super) target: Option<&'a AgentDropTarget>,
+}
+
+#[allow(clippy::too_many_arguments)] // One more than the shared panel inputs: the live drag.
 pub(super) fn render_agent_panel(
     buffer: &mut Buffer,
     area: Rect,
@@ -85,12 +93,19 @@ pub(super) fn render_agent_panel(
     config: &ClientShellConfig,
     collapsed_groups: &HashSet<String>,
     agent_scroll: &mut usize,
+    drag: Option<AgentDragView<'_>>,
     hits: &mut ShellHitMap,
 ) {
+    // While dragging, the header's sort label says what a release would do.
+    let drop_hint = drag.map(|drag| match drag.target {
+        Some(AgentDropTarget::Parent(_)) => "nest",
+        Some(AgentDropTarget::Unnest) => "un-nest",
+        None => "drag to a parent",
+    });
     if !render_agent_panel_header(
         buffer,
         area,
-        snapshot.agent_view_label.as_deref(),
+        drop_hint.or(snapshot.agent_view_label.as_deref()),
         config,
         hits,
     ) {
@@ -114,6 +129,9 @@ pub(super) fn render_agent_panel(
             hits.agents.push((rect, row.pane_id.clone()));
             if let Some(toggle) = render_padded_agent_row(buffer, rect, row, config) {
                 hits.agent_group_toggles.push(toggle);
+            }
+            if let Some(drag) = drag {
+                render_agent_drag_marks(buffer, rect, row, drag, config);
             }
             // `row_gap` rows below a nested row carry the same lines as its bottom padding.
             // The last row never has lines below it, so no gap is drawn past the list.
@@ -392,7 +410,8 @@ fn build_agent_row(
 
 /// A child in its parent's workspace would repeat the parent's workspace name, so it takes the
 /// agent label as its name instead: the workspace token shows the label and the agent token,
-/// now redundant, is dropped (with its line, if nothing else is left on it).
+/// now redundant, is dropped (with its line, if nothing else is left on it), as is a tab label
+/// that only repeats the agent label.
 fn name_nested_row_by_agent(rows: &mut Vec<Vec<crate::ui::ResolvedToken>>, label: &str) {
     use crate::ui::ResolvedTokenKind;
     let mut renamed = false;
@@ -406,7 +425,11 @@ fn name_nested_row_by_agent(rows: &mut Vec<Vec<crate::ui::ResolvedToken>>, label
         return;
     }
     for line in rows.iter_mut() {
-        line.retain(|token| !matches!(token.kind, ResolvedTokenKind::Agent(_)));
+        line.retain(|token| match &token.kind {
+            ResolvedTokenKind::Agent(_) => false,
+            ResolvedTokenKind::Tab(tab) => tab != label,
+            _ => true,
+        });
     }
     rows.retain(|line| !line.is_empty());
 }
@@ -479,6 +502,31 @@ pub(super) fn agent_rows(
         }
     }
     rows
+}
+
+/// Dims the dragged row and marks the parent it would nest under with an accent bar in the
+/// free first column.
+fn render_agent_drag_marks(
+    buffer: &mut Buffer,
+    rect: Rect,
+    row: &AgentRow,
+    drag: AgentDragView<'_>,
+    config: &ClientShellConfig,
+) {
+    if row.pane_id == drag.pane_id {
+        buffer.set_style(
+            rect,
+            Style::default()
+                .bg(config.palette.surface1)
+                .add_modifier(Modifier::DIM),
+        );
+    } else if matches!(drag.target, Some(AgentDropTarget::Parent(parent)) if *parent == row.pane_id)
+    {
+        let accent = Style::default().fg(config.palette.accent);
+        for y in rect.y..rect.bottom() {
+            put_text(buffer, rect.x, y, 1, "▌", accent);
+        }
+    }
 }
 
 /// Padding rows above and below an agent row. A nested row keeps only its bottom padding: the

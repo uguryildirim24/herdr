@@ -226,6 +226,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) selected_workspace_id: Option<&'a str>,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    pub(super) agent_drag: Option<super::agent_sidebar::AgentDragView<'a>>,
 }
 
 pub(super) fn render_shell(

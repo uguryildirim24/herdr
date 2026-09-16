@@ -56,6 +56,7 @@ impl ClientShellState {
                 selected_workspace_id: self.navigate_workspace_id.as_deref(),
                 dragged_workspace_id: None,
                 workspace_drop_indicator_row: None,
+                agent_drag: None,
             },
             &mut self.hits,
         );
@@ -132,6 +133,15 @@ impl ClientShellState {
             ),
             _ => (None, None),
         };
+        let agent_drag = match &self.chrome_drag {
+            Some(ClientChromeDrag::Agent { pane_id, target }) => {
+                Some(super::agent_sidebar::AgentDragView {
+                    pane_id,
+                    target: target.as_ref(),
+                })
+            }
+            _ => None,
+        };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         self.hits = render::render_shell(
             &mut buffer,
@@ -156,6 +166,7 @@ impl ClientShellState {
                     .flatten(),
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                agent_drag,
             },
         );
         self.hits.panes = surface

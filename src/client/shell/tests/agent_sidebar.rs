@@ -65,6 +65,7 @@ fn byte_identical_rendering_flag_off_vs_flag_on_without_tokens() {
         &config_off,
         &collapsed,
         &mut scroll_off,
+        None,
         &mut hits_off,
     );
 
@@ -78,6 +79,7 @@ fn byte_identical_rendering_flag_off_vs_flag_on_without_tokens() {
         &config_on,
         &collapsed,
         &mut scroll_on,
+        None,
         &mut hits_on,
     );
 
@@ -378,6 +380,7 @@ fn collapsed_subtree_is_absent_from_navigation_and_hit_map() {
         &config,
         &collapsed,
         &mut scroll,
+        None,
         &mut hits,
     );
 
@@ -542,6 +545,7 @@ fn narrow_sidebar_truncates_nested_rows_without_panicking() {
                 &config,
                 &collapsed,
                 &mut scroll,
+                None,
                 &mut hits,
             );
             for (rect, _, _) in &hits.agent_group_toggles {
@@ -1044,4 +1048,33 @@ rows = [["state_icon", "workspace"], ["state_text", "agent"]]
             vec!["idle".into(), "c2".into()]
         ]
     );
+}
+
+#[test]
+fn nested_child_drops_a_tab_label_that_repeats_its_name() {
+    let mut snapshot = snapshot();
+    let mut second_tab = snapshot.tabs[0].clone();
+    second_tab.tab_id = "tab_2".into();
+    second_tab.label = "c1".into();
+    second_tab.custom_label = true;
+    snapshot.tabs.push(second_tab);
+    let mut child = tree_agent("c1", AgentStatus::Done, 2, Some("p1"));
+    child.tab_id = "tab_2".into();
+    snapshot.agents = vec![tree_agent("p1", AgentStatus::Working, 1, None), child];
+    let parsed: Config = toml::from_str(
+        r#"
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "tab"]]
+"#,
+    )
+    .expect("agent rows config");
+    let mut config = ClientShellConfig::from_config(&parsed);
+    config.agent_parent_nesting = true;
+
+    let rows = agent_rows(&snapshot, &config, Some(&HashSet::new()), None);
+    let kinds = rows[1].rows[0]
+        .iter()
+        .map(|token| format!("{:?}", token.kind))
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["StateIcon", "Workspace(\"c1\")"]);
 }

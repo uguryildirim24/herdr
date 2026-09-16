@@ -239,6 +239,20 @@ pub(super) struct ClientWorkspacePress {
     pub(super) start_row: u16,
 }
 
+pub(super) struct ClientAgentPress {
+    pub(super) pane_id: String,
+    pub(super) start_column: u16,
+    pub(super) start_row: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AgentDropTarget {
+    /// Nest the dragged agent under this agent pane.
+    Parent(String),
+    /// Clear the dragged agent's parent so it becomes a top-level row again.
+    Unnest,
+}
+
 pub(super) struct ClientTabPress {
     pub(super) tab_id: String,
     pub(super) workspace_id: String,
@@ -272,6 +286,11 @@ pub(super) enum ClientChromeDrag {
     Workspace {
         source_workspace_id: String,
         target: Option<(Option<String>, u16)>,
+    },
+    /// An agent row dragged in the Agents panel; dropping it sets or clears its `parent` token.
+    Agent {
+        pane_id: String,
+        target: Option<AgentDropTarget>,
     },
     PaneSplit {
         hit: PaneSplitHit,
@@ -921,6 +940,7 @@ pub(crate) struct ClientShellState {
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) workspace_press: Option<ClientWorkspacePress>,
     pub(super) tab_press: Option<ClientTabPress>,
+    pub(super) agent_press: Option<ClientAgentPress>,
     pub(super) collapsed_groups: HashSet<String>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
@@ -1064,6 +1084,7 @@ impl ClientShellState {
             chrome_drag: None,
             workspace_press: None,
             tab_press: None,
+            agent_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
@@ -1209,6 +1230,7 @@ impl ClientShellState {
         self.chrome_drag = None;
         self.workspace_press = None;
         self.tab_press = None;
+        self.agent_press = None;
         self.workspace_scroll = 0;
         self.agent_scroll = 0;
         self.tab_scroll = 0;
@@ -1627,6 +1649,7 @@ impl ClientShellState {
             self.chrome_drag = None;
             self.workspace_press = None;
             self.tab_press = None;
+            self.agent_press = None;
             if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
                 gesture.hit.popup && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
             }) {
