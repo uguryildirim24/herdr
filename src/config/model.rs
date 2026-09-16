@@ -1203,6 +1203,7 @@ impl Default for UiConfig {
 }
 
 pub(crate) const MAX_TAB_BAR_PADDING_Y: u16 = 1;
+pub(crate) const MAX_TAB_BAR_PADDING_X: u16 = 8;
 pub(crate) const DEFAULT_TAB_BAR_PADDING_X: u16 = 2;
 
 impl UiConfig {
@@ -1211,13 +1212,26 @@ impl UiConfig {
         self.tab_bar_padding_y.min(MAX_TAB_BAR_PADDING_Y)
     }
 
-    pub fn tab_bar_padding_diagnostics(&self) -> Option<String> {
-        (self.tab_bar_padding_y > MAX_TAB_BAR_PADDING_Y).then(|| {
-            format!(
+    /// Horizontal tab bar padding clamped to the supported range.
+    pub fn tab_bar_padding_x(&self) -> u16 {
+        self.tab_bar_padding_x.min(MAX_TAB_BAR_PADDING_X)
+    }
+
+    pub fn tab_bar_padding_diagnostics(&self) -> Vec<String> {
+        let mut diagnostics = Vec::new();
+        if self.tab_bar_padding_y > MAX_TAB_BAR_PADDING_Y {
+            diagnostics.push(format!(
                 "ui.tab_bar_padding_y must be between 0 and {MAX_TAB_BAR_PADDING_Y} (got {}); using {MAX_TAB_BAR_PADDING_Y}",
                 self.tab_bar_padding_y
-            )
-        })
+            ));
+        }
+        if self.tab_bar_padding_x > MAX_TAB_BAR_PADDING_X {
+            diagnostics.push(format!(
+                "ui.tab_bar_padding_x must be between 0 and {MAX_TAB_BAR_PADDING_X} (got {}); using {MAX_TAB_BAR_PADDING_X}",
+                self.tab_bar_padding_x
+            ));
+        }
+        diagnostics
     }
 
     pub fn mouse_scroll_lines(&self) -> usize {
@@ -1514,7 +1528,7 @@ status_indicators = "symbols"
         assert_eq!(default_config.ui.tab_bar_right_separator, " ");
         assert_eq!(default_config.ui.tab_bar_padding_y(), 0);
         assert_eq!(default_config.ui.tab_bar_padding_x, 2);
-        assert!(default_config.ui.tab_bar_padding_diagnostics().is_none());
+        assert!(default_config.ui.tab_bar_padding_diagnostics().is_empty());
 
         let toml = r#"
 [ui]
@@ -1556,18 +1570,36 @@ tab_bar_right_separator = " · "
             toml::from_str("[ui]\ntab_bar_padding_y = 1\ntab_bar_padding_x = 3\n").unwrap();
         assert_eq!(config.ui.tab_bar_padding_y(), 1);
         assert_eq!(config.ui.tab_bar_padding_x, 3);
-        assert!(config.ui.tab_bar_padding_diagnostics().is_none());
+        assert!(config.ui.tab_bar_padding_diagnostics().is_empty());
         assert!(config.collect_diagnostics().is_empty());
 
         let config: Config = toml::from_str("[ui]\ntab_bar_padding_y = 4\n").unwrap();
         assert_eq!(config.ui.tab_bar_padding_y(), 1);
-        let diagnostic = config
-            .ui
-            .tab_bar_padding_diagnostics()
-            .expect("out-of-range padding diagnostic");
-        assert!(diagnostic.contains("ui.tab_bar_padding_y"));
-        assert!(diagnostic.contains("got 4"));
-        assert!(config.collect_diagnostics().contains(&diagnostic));
+        let diagnostics = config.ui.tab_bar_padding_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("ui.tab_bar_padding_y"));
+        assert!(diagnostics[0].contains("got 4"));
+        assert!(config.collect_diagnostics().contains(&diagnostics[0]));
+    }
+
+    #[test]
+    fn tab_bar_padding_clamps_horizontal_padding() {
+        let config: Config = toml::from_str("[ui]\ntab_bar_padding_x = 8\n").unwrap();
+        assert_eq!(config.ui.tab_bar_padding_x(), 8);
+        assert!(config.ui.tab_bar_padding_diagnostics().is_empty());
+
+        let config: Config =
+            toml::from_str("[ui]\ntab_bar_padding_x = 65535\ntab_bar_padding_y = 2\n").unwrap();
+        assert_eq!(config.ui.tab_bar_padding_x(), 8);
+        let diagnostics = config.ui.tab_bar_padding_diagnostics();
+        assert_eq!(diagnostics.len(), 2);
+        let horizontal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("ui.tab_bar_padding_x"))
+            .expect("horizontal padding diagnostic");
+        assert!(horizontal.contains("got 65535"));
+        assert!(horizontal.contains("using 8"));
+        assert!(config.collect_diagnostics().contains(horizontal));
     }
 
     #[test]

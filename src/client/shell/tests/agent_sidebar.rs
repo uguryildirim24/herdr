@@ -105,6 +105,8 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: Some("agent:parent".into()),
     };
     let child1 = AgentRow {
@@ -120,6 +122,8 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: None,
     };
     let child2 = AgentRow {
@@ -135,6 +139,8 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child: true,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: None,
     };
 
@@ -184,6 +190,8 @@ fn collapsed_parent_shows_badge_and_worst_status() {
         hidden_descendants: 2,
         worst_hidden_status: Some(AgentStatus::Blocked),
         is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: Some("agent:parent".into()),
     };
 
@@ -224,6 +232,8 @@ fn depth_four_clamps_to_depth_three_indentation() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: None,
     };
     let depth_4_row = AgentRow {
@@ -239,6 +249,8 @@ fn depth_four_clamps_to_depth_three_indentation() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: None,
     };
 
@@ -465,6 +477,8 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
         hidden_descendants: 0,
         worst_hidden_status: None,
         is_last_child,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
         group_key: None,
     };
 
@@ -584,10 +598,12 @@ fn compact_sidebar_nests_children_after_their_parent_with_tree_marks() {
     let (buffer, hits) = render_compact(&snapshot, &config, &HashSet::new(), area);
 
     let y = COMPACT_AGENT_Y;
+    // A parent with visible children puts the `▾` collapse toggle in the tree column.
     assert_eq!(
         compact_line(&buffer, y, 3),
-        format!("1 {}", icon(AgentStatus::Working))
+        format!("▾1{}", icon(AgentStatus::Working))
     );
+    assert_eq!(buffer[(0, y)].fg, config.palette.accent);
     assert_eq!(
         compact_line(&buffer, y + 1, 3),
         format!("├2{}", icon(AgentStatus::Blocked))
@@ -607,7 +623,14 @@ fn compact_sidebar_nests_children_after_their_parent_with_tree_marks() {
             .collect::<Vec<_>>(),
         vec![(y, "p1"), (y + 1, "c1"), (y + 2, "c2"), (y + 3, "p2")]
     );
-    assert!(hits.agent_group_toggles.is_empty());
+    assert_eq!(
+        hits.agent_group_toggles,
+        vec![(
+            Rect::new(0, y, 1, 1),
+            "p1".to_string(),
+            "agent:p1".to_string()
+        )]
+    );
     // The numbers are the indices indexed focus jumps use.
     assert_eq!(
         visible_agent_pane_ids(&snapshot, &config, Some(&HashSet::new()), None),
@@ -783,7 +806,8 @@ fn compact_sidebar_marks_deeper_levels_by_their_own_siblings() {
     let marks = (0..4)
         .map(|line| buffer[(0, COMPACT_AGENT_Y + line)].symbol().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(marks, vec!["1", "├", "└", "└"]);
+    // c1 is itself a parent with a visible child, so it shows the collapse toggle.
+    assert_eq!(marks, vec!["▾", "▾", "└", "└"]);
 }
 
 #[test]
@@ -821,4 +845,140 @@ fn compact_sidebar_ignores_row_padding_with_nesting() {
             plain_hits.agent_group_toggles
         );
     }
+}
+
+fn compact_click(state: &mut ClientShellState, column: u16, row: u16) -> ClientShellInput {
+    let event = |kind| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    state.handle_raw_events(vec![
+        event(MouseEventKind::Down(MouseButton::Left)),
+        event(MouseEventKind::Up(MouseButton::Left)),
+    ])
+}
+
+fn compact_nesting_state() -> ClientShellState {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(compact_nesting_snapshot()));
+    state.set_pane_surface(surface());
+    state.sidebar_collapsed = true;
+    state
+}
+
+fn compact_agent_y(state: &ClientShellState, pane_id: &str) -> u16 {
+    state
+        .hits
+        .agents
+        .iter()
+        .find(|(_, id)| id == pane_id)
+        .map(|(rect, _)| rect.y)
+        .expect("compact agent cell")
+}
+
+#[test]
+fn compact_sidebar_collapse_marker_toggles_the_shared_group_state() {
+    let mut state = compact_nesting_state();
+    state.compose(106, 30).expect("compact frame");
+    let parent_y = compact_agent_y(&state, "p1");
+    assert_eq!(
+        state.hits.agent_group_toggles,
+        vec![(
+            Rect::new(0, parent_y, 1, 1),
+            "p1".to_string(),
+            "agent:p1".to_string()
+        )]
+    );
+
+    // `▾` collapses through the same `collapsed_groups` key the expanded panel uses.
+    let outcome = compact_click(&mut state, 0, parent_y);
+    assert!(outcome.actions.is_empty(), "the toggle must not focus");
+    assert!(state.collapsed_groups.contains("agent:p1"));
+    state.compose(106, 30).expect("collapsed compact frame");
+    let (roll_up, _, key) = state.hits.agent_group_toggles[0].clone();
+    assert_eq!(key, "agent:p1");
+    assert_eq!(roll_up.y, parent_y + 1);
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["p1", "p2"]
+    );
+    assert_eq!(
+        visible_agent_pane_ids(
+            state.snapshot.as_deref().expect("snapshot"),
+            &state.config,
+            Some(&state.collapsed_groups),
+            None
+        ),
+        vec!["p1", "p2"]
+    );
+
+    // The roll-up expands it again, and the expanded panel sees the same state.
+    compact_click(&mut state, roll_up.x, roll_up.y);
+    assert!(!state.collapsed_groups.contains("agent:p1"));
+    state.sidebar_collapsed = false;
+    state.compose(106, 30).expect("expanded frame");
+    assert!(state.hits.agents.iter().any(|(_, pane_id)| pane_id == "c1"));
+
+    // The rest of the parent cell still focuses the parent.
+    state.sidebar_collapsed = true;
+    state.compose(106, 30).expect("compact frame again");
+    let outcome = compact_click(&mut state, 1, parent_y);
+    assert!(matches!(
+        &outcome.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id })
+                    if pane_id == "p1"
+            )
+    ));
+    assert!(!state.collapsed_groups.contains("agent:p1"));
+}
+
+#[test]
+fn compact_sidebar_numbers_children_past_nine_like_flat_cells() {
+    let mut snapshot = snapshot();
+    snapshot.agents = std::iter::once(tree_agent("p1", AgentStatus::Idle, 0, None))
+        .chain(
+            (1..=11)
+                .map(|seq| tree_agent(&format!("c{seq}"), AgentStatus::Working, seq, Some("p1"))),
+        )
+        .collect();
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let icon = status_icon(AgentStatus::Working, config.status_indicators);
+
+    let (buffer, hits) =
+        render_compact(&snapshot, &config, &HashSet::new(), Rect::new(0, 0, 4, 40));
+    let (flat_buffer, _) = render_compact(
+        &snapshot,
+        &ClientShellConfig::from_config(&Config::default()),
+        &HashSet::new(),
+        Rect::new(0, 0, 4, 40),
+    );
+
+    let first = hits.agents[0].0.y;
+    assert_eq!(compact_line(&buffer, first + 8, 3), format!("├9{icon}"));
+    // Index 10 and up: the two-digit index takes the tree column, exactly like the flat list.
+    for index in [10u16, 11, 12] {
+        let y = first + index - 1;
+        let line = compact_line(&buffer, y, 3);
+        assert!(
+            line.starts_with(&index.to_string()),
+            "index {index}: {line}"
+        );
+        assert_eq!(line, compact_line(&flat_buffer, y, 3));
+    }
+    assert_eq!(hits.agents.len(), 12);
 }

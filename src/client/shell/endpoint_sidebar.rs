@@ -334,18 +334,16 @@ pub(super) fn render_expanded(
             }
         })
         .collect::<Vec<_>>();
+    // `ui.sidebar.spaces.row_gap` follows the local Spaces rule: a gap before every top-level
+    // row, none inside a worktree group. An endpoint header stays attached to its first
+    // workspace, and the next header is separated from the previous machine's rows.
     let gaps = rows
         .iter()
         .enumerate()
         .map(|(index, row)| match (row, rows.get(index + 1)) {
-            (
-                Row::Workspace { endpoint, .. },
-                Some(Row::Workspace {
-                    endpoint: next_endpoint,
-                    entry,
-                }),
-            ) if endpoint == next_endpoint => u16::from(!entry.indented) * config.spaces.row_gap,
-            _ => 0,
+            (_, None) | (Row::Endpoint(_), _) => 0,
+            (_, Some(Row::Workspace { entry, .. })) if entry.indented => 0,
+            _ => config.spaces.row_gap,
         })
         .collect::<Vec<_>>();
     let reveal_navigation = !body.is_empty() && std::mem::take(state.reveal_navigation_workspace);

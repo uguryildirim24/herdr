@@ -125,7 +125,11 @@ pub(crate) fn render_collapsed_sidebar(
             1,
         );
         match cell {
-            CollapsedAgentCell::Agent { pane_id, tree_mark } => {
+            CollapsedAgentCell::Agent {
+                pane_id,
+                tree_mark,
+                group_key,
+            } => {
                 let Some(agent) = snapshot
                     .agents
                     .iter()
@@ -142,36 +146,60 @@ pub(crate) fn render_collapsed_sidebar(
                 } else {
                     palette.overlay0
                 });
-                if let Some(mark) = tree_mark {
-                    // Children trade the number's first column for the tree mark and keep
-                    // the single-digit index that indexed focus jumps use.
-                    put_text(
-                        buffer,
-                        rect.x,
-                        rect.y,
-                        rect.width.min(1),
-                        mark,
-                        Style::default().fg(palette.overlay0),
-                    );
-                    if agent_index < 10 {
-                        put_text(
-                            buffer,
-                            rect.x.saturating_add(1),
-                            rect.y,
-                            rect.width.saturating_sub(1).min(1),
-                            &agent_index.to_string(),
-                            number_style,
-                        );
-                    }
+                // Nested cells use the first column as the tree column: `▾` on a parent whose
+                // children are showing (click it to collapse, the way `▸` on the roll-up cell
+                // expands), `├`/`└` on a child. The index moves to the second column.
+                let tree_glyph = if group_key.is_some() {
+                    Some(("▾", Style::default().fg(palette.accent)))
                 } else {
-                    put_text(
+                    tree_mark.map(|mark| (mark, Style::default().fg(palette.overlay0)))
+                };
+                match tree_glyph {
+                    // A child past 9 shows its two-digit index like a flat cell, in place of
+                    // the tree mark. A parent keeps `▾`, its only collapse affordance here.
+                    Some(_) if agent_index >= 10 && group_key.is_none() => put_text(
                         buffer,
                         rect.x,
                         rect.y,
                         rect.width.min(2),
                         &format!("{agent_index:<2}"),
                         number_style,
-                    );
+                    ),
+                    Some((glyph, glyph_style)) => {
+                        put_text(
+                            buffer,
+                            rect.x,
+                            rect.y,
+                            rect.width.min(1),
+                            glyph,
+                            glyph_style,
+                        );
+                        if agent_index < 10 {
+                            put_text(
+                                buffer,
+                                rect.x.saturating_add(1),
+                                rect.y,
+                                rect.width.saturating_sub(1).min(1),
+                                &agent_index.to_string(),
+                                number_style,
+                            );
+                        }
+                    }
+                    None => put_text(
+                        buffer,
+                        rect.x,
+                        rect.y,
+                        rect.width.min(2),
+                        &format!("{agent_index:<2}"),
+                        number_style,
+                    ),
+                }
+                if let Some(group_key) = group_key.filter(|_| !rect.is_empty()) {
+                    hits.agent_group_toggles.push((
+                        Rect::new(rect.x, rect.y, 1, 1),
+                        pane_id.clone(),
+                        group_key,
+                    ));
                 }
                 put_text(
                     buffer,
@@ -257,6 +285,9 @@ enum CollapsedAgentCell {
         pane_id: String,
         /// `├` or `└` for nested rows; `None` for top-level rows.
         tree_mark: Option<&'static str>,
+        /// `collapsed_groups` key when this is a parent whose children are visible, so the
+        /// cell draws the `▾` collapse toggle.
+        group_key: Option<String>,
     },
     /// Stands in for the hidden subtree of the collapsed parent directly above it.
     RollUp {
@@ -281,6 +312,7 @@ fn collapsed_agent_cells(
             .map(|pane_id| CollapsedAgentCell::Agent {
                 pane_id,
                 tree_mark: None,
+                group_key: None,
             })
             .collect();
     }
@@ -298,9 +330,12 @@ fn collapsed_agent_cells(
                 hidden_descendants: row.hidden_descendants,
                 worst_hidden_status,
             });
+        let group_key = (row.child_count > 0 && !row.collapsed)
+            .then(|| super::super::agent_tree::agent_group_key(None, &row.pane_id));
         cells.push(CollapsedAgentCell::Agent {
             pane_id: row.pane_id,
             tree_mark: (row.depth > 0).then_some(if is_last_child { "└" } else { "├" }),
+            group_key,
         });
         cells.extend(roll_up);
     }

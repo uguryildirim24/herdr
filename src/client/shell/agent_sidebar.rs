@@ -20,6 +20,10 @@ pub(super) struct AgentRow {
     pub(super) hidden_descendants: usize,
     pub(super) worst_hidden_status: Option<crate::api::schema::AgentStatus>,
     pub(super) is_last_child: bool,
+    /// Tree lines passing between the previous visible row and this one, and between this
+    /// row and the next (see `agent_tree::tree_lines_below`). Zero outside nesting.
+    pub(super) tree_lines_above: u8,
+    pub(super) tree_lines_below: u8,
     /// `collapsed_groups` key for this row; `Some` only when the row has children.
     pub(super) group_key: Option<String>,
 }
@@ -111,6 +115,19 @@ pub(super) fn render_agent_panel(
             if let Some(toggle) = render_padded_agent_row(buffer, rect, row, config) {
                 hits.agent_group_toggles.push(toggle);
             }
+            // `row_gap` rows below a nested row carry the same lines as its bottom padding.
+            // The last row never has lines below it, so no gap is drawn past the list.
+            let gap_end = rect
+                .bottom()
+                .saturating_add(config.agents.row_gap)
+                .min(hits.agent_body.bottom());
+            render_tree_lines(
+                buffer,
+                rect,
+                rect.bottom()..gap_end,
+                row.tree_lines_below,
+                config,
+            );
         },
     );
 }
@@ -273,6 +290,7 @@ fn build_agent_row(
     hidden_descendants: usize,
     worst_hidden_status: Option<crate::api::schema::AgentStatus>,
     is_last_child: bool,
+    tree_lines: (u8, u8),
     group_key: Option<String>,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
@@ -347,6 +365,8 @@ fn build_agent_row(
         hidden_descendants,
         worst_hidden_status,
         is_last_child,
+        tree_lines_above: tree_lines.0,
+        tree_lines_below: tree_lines.1,
         group_key,
     })
 }
@@ -365,7 +385,17 @@ pub(super) fn agent_rows(
             .into_iter()
             .filter_map(|pane_id| {
                 build_agent_row(
-                    &pane_id, 0, false, 0, None, false, None, snapshot, config, machine,
+                    &pane_id,
+                    0,
+                    false,
+                    0,
+                    None,
+                    false,
+                    (0, 0),
+                    None,
+                    snapshot,
+                    config,
+                    machine,
                 )
             })
             .collect();
@@ -373,8 +403,12 @@ pub(super) fn agent_rows(
 
     let tree_rows = super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine);
     let last_child = super::agent_tree::last_child_flags(&tree_rows);
+    let lines_below = super::agent_tree::tree_lines_below(&tree_rows);
     let mut rows = Vec::with_capacity(tree_rows.len());
-    for (tree_row, is_last_child) in tree_rows.iter().zip(last_child) {
+    for (index, (tree_row, is_last_child)) in tree_rows.iter().zip(last_child).enumerate() {
+        let lines_above = index
+            .checked_sub(1)
+            .map_or(0, |previous| lines_below[previous]);
         let group_key = (tree_row.child_count > 0)
             .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
         if let Some(row) = build_agent_row(
@@ -384,6 +418,7 @@ pub(super) fn agent_rows(
             tree_row.hidden_descendants,
             tree_row.worst_hidden_status,
             is_last_child,
+            (lines_above, lines_below[index]),
             group_key,
             snapshot,
             config,
@@ -407,8 +442,8 @@ pub(super) fn agent_row(
 }
 
 /// Renders an agent row into a rect that includes `ui.sidebar.agents.row_padding` rows above
-/// and below. The padding rows share the row highlight; the content lines are drawn by
-/// `render_agent_row`.
+/// and below. The padding rows share the row highlight and carry the tree lines that pass
+/// through them; the content lines are drawn by `render_agent_row`.
 pub(super) fn render_padded_agent_row(
     buffer: &mut Buffer,
     rect: Rect,
@@ -419,12 +454,38 @@ pub(super) fn render_padded_agent_row(
         buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
     }
     let padding = config.agents.row_padding;
+    let top = rect.y..rect.y.saturating_add(padding).min(rect.bottom());
+    let bottom = rect.bottom().saturating_sub(padding).max(top.end)..rect.bottom();
+    render_tree_lines(buffer, rect, top, row.tree_lines_above, config);
+    render_tree_lines(buffer, rect, bottom, row.tree_lines_below, config);
     render_agent_row(
         buffer,
         super::sidebar::padded_content_rect(rect, (padding, padding)),
         row,
         config,
     )
+}
+
+/// Draws `│` in every indentation column set in `mask` on rows `ys`, in the connector style
+/// `render_agent_row` uses. Used for padding and `row_gap` rows between nested agents.
+pub(super) fn render_tree_lines(
+    buffer: &mut Buffer,
+    rect: Rect,
+    ys: std::ops::Range<u16>,
+    mask: u8,
+    config: &ClientShellConfig,
+) {
+    if mask == 0 {
+        return;
+    }
+    let style = Style::default().fg(config.palette.overlay0);
+    for y in ys {
+        for column in 0..super::agent_tree::TREE_LINE_COLUMNS {
+            if mask & (1 << column) != 0 && (column as u16) * 2 < rect.width {
+                put_text(buffer, rect.x + column as u16 * 2, y, 1, "│", style);
+            }
+        }
+    }
 }
 
 pub(super) fn render_agent_row(
@@ -489,7 +550,16 @@ pub(super) fn render_agent_row(
             let indent = if index == 0 { 1 } else { 3 };
             vec![ratatui::text::Span::raw(" ".repeat(indent))]
         } else {
-            let leading = "  ".repeat(clamped_depth.saturating_sub(1));
+            // Ancestor columns carry the lines of ancestors that still have siblings below.
+            let leading = (1..clamped_depth)
+                .map(|column| {
+                    if row.tree_lines_below & (1 << (column - 1)) != 0 {
+                        "│ "
+                    } else {
+                        "  "
+                    }
+                })
+                .collect::<String>();
             let branch = if index == 0 {
                 if row.is_last_child {
                     "└─ "
