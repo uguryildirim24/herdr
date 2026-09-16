@@ -138,26 +138,37 @@ pub(crate) fn render_collapsed_sidebar(
                     continue;
                 };
                 agent_index += 1;
-                if agent.focused {
-                    buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+                if agent.focused && !rect.is_empty() {
+                    // Like the expanded panel, the highlight runs through the sidebar
+                    // separator up to the pane.
+                    if let Some(cell) = buffer.cell_mut((rect.right(), rect.y)) {
+                        cell.set_symbol(" ");
+                    }
+                    buffer.set_style(
+                        Rect::new(rect.x, rect.y, rect.width.saturating_add(1), 1),
+                        Style::default().bg(palette.active_row_bg),
+                    );
                 }
                 let number_style = Style::default().fg(if agent.focused {
                     palette.text
                 } else {
                     palette.overlay0
                 });
-                // Nested cells use the first column as the tree column: `▼` on a parent whose
-                // children are showing (click it to collapse, the way `▶` on the roll-up cell
-                // expands), `├`/`└` on a child. The index moves to the second column.
-                let tree_glyph = if group_key.is_some() {
-                    Some(("▼", Style::default().fg(palette.accent)))
-                } else {
-                    tree_mark.map(|mark| (mark, Style::default().fg(palette.overlay0)))
-                };
+                // Nested cells use the first column as the tree column: `┣`/`┗` on a child, in
+                // its status color like the expanded panel's branches. The index moves to the
+                // second column.
+                let tree_glyph = tree_mark.map(|mark| {
+                    (
+                        mark,
+                        Style::default()
+                            .fg(status_color(agent.agent_status, palette))
+                            .add_modifier(Modifier::DIM),
+                    )
+                });
                 match tree_glyph {
                     // A child past 9 shows its two-digit index like a flat cell, in place of
-                    // the tree mark. A parent keeps `▼`, its only collapse affordance here.
-                    Some(_) if agent_index >= 10 && group_key.is_none() => put_text(
+                    // the tree mark.
+                    Some(_) if agent_index >= 10 => put_text(
                         buffer,
                         rect.x,
                         rect.y,
@@ -194,9 +205,10 @@ pub(crate) fn render_collapsed_sidebar(
                         number_style,
                     ),
                 }
-                if let Some(group_key) = group_key.filter(|_| !rect.is_empty()) {
+                // A parent's status mark folds and unfolds its group.
+                if let Some(group_key) = group_key.filter(|_| rect.width > 2 && rect.height > 0) {
                     hits.agent_group_toggles.push((
-                        Rect::new(rect.x, rect.y, 1, 1),
+                        Rect::new(rect.x.saturating_add(2), rect.y, 1, 1),
                         pane_id.clone(),
                         group_key,
                     ));
@@ -214,40 +226,24 @@ pub(crate) fn render_collapsed_sidebar(
             CollapsedAgentCell::RollUp {
                 pane_id,
                 group_key,
-                hidden_descendants,
-                worst_hidden_status,
+                hidden_status_counts,
             } => {
-                // The compact form of the expanded roll-up badge `▶ N ●`: chevron, count
-                // (`+` past 9 so it stays one column), and the worst hidden status.
-                put_text(
-                    buffer,
-                    rect.x,
-                    rect.y,
-                    rect.width.min(1),
-                    "▶",
-                    Style::default().fg(palette.accent),
-                );
-                let count = if hidden_descendants < 10 {
-                    hidden_descendants.to_string()
-                } else {
-                    "+".to_owned()
-                };
-                put_text(
-                    buffer,
-                    rect.x.saturating_add(1),
-                    rect.y,
-                    rect.width.saturating_sub(1).min(1),
-                    &count,
-                    Style::default().fg(palette.overlay0),
-                );
-                put_text(
-                    buffer,
-                    rect.x.saturating_add(2),
-                    rect.y,
-                    rect.width.saturating_sub(2),
-                    status_icon(worst_hidden_status, config.status_indicators),
-                    Style::default().fg(status_color(worst_hidden_status, palette)),
-                );
+                // The compact form of the expanded dot stack: up to three hidden statuses,
+                // most urgent first, right-aligned so the last one sits in the status column.
+                let width = usize::from(rect.width.min(3));
+                let stack = super::super::agent_tree::status_stack(&hidden_status_counts, width)
+                    .collect::<Vec<_>>();
+                let x = rect.x.saturating_add((width - stack.len()) as u16);
+                for (offset, status) in stack.into_iter().enumerate() {
+                    put_text(
+                        buffer,
+                        x.saturating_add(offset as u16),
+                        rect.y,
+                        1,
+                        status_icon(status, config.status_indicators),
+                        Style::default().fg(status_color(status, palette)),
+                    );
+                }
                 if !rect.is_empty() {
                     hits.agent_group_toggles.push((rect, pane_id, group_key));
                 }
@@ -283,18 +279,16 @@ pub(crate) fn render_collapsed_sidebar(
 enum CollapsedAgentCell {
     Agent {
         pane_id: String,
-        /// `├` or `└` for nested rows; `None` for top-level rows.
+        /// `┣` or `┗` for nested rows; `None` for top-level rows.
         tree_mark: Option<&'static str>,
-        /// `collapsed_groups` key when this is a parent whose children are visible, so the
-        /// cell draws the `▼` collapse toggle.
+        /// `collapsed_groups` key when this is a parent, so its status mark toggles the group.
         group_key: Option<String>,
     },
     /// Stands in for the hidden subtree of the collapsed parent directly above it.
     RollUp {
         pane_id: String,
         group_key: String,
-        hidden_descendants: usize,
-        worst_hidden_status: crate::api::schema::AgentStatus,
+        hidden_status_counts: super::super::agent_tree::StatusCounts,
     },
 }
 
@@ -321,20 +315,17 @@ fn collapsed_agent_cells(
     let last_child = super::super::agent_tree::last_child_flags(&tree_rows);
     let mut cells = Vec::with_capacity(tree_rows.len());
     for (row, is_last_child) in tree_rows.into_iter().zip(last_child) {
-        let roll_up = row
-            .worst_hidden_status
-            .filter(|_| row.collapsed && row.hidden_descendants > 0)
-            .map(|worst_hidden_status| CollapsedAgentCell::RollUp {
+        let roll_up =
+            (row.collapsed && row.hidden_descendants > 0).then(|| CollapsedAgentCell::RollUp {
                 pane_id: row.pane_id.clone(),
                 group_key: super::super::agent_tree::agent_group_key(None, &row.pane_id),
-                hidden_descendants: row.hidden_descendants,
-                worst_hidden_status,
+                hidden_status_counts: row.hidden_status_counts,
             });
-        let group_key = (row.child_count > 0 && !row.collapsed)
+        let group_key = (row.child_count > 0)
             .then(|| super::super::agent_tree::agent_group_key(None, &row.pane_id));
         cells.push(CollapsedAgentCell::Agent {
             pane_id: row.pane_id,
-            tree_mark: (row.depth > 0).then_some(if is_last_child { "└" } else { "├" }),
+            tree_mark: (row.depth > 0).then_some(if is_last_child { "┗" } else { "┣" }),
             group_key,
         });
         cells.extend(roll_up);

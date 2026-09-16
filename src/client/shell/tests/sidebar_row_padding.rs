@@ -228,7 +228,7 @@ fn reveal_scrolls_padded_focused_space_fully_into_view() {
 }
 
 #[test]
-fn padded_nested_agent_rows_extend_highlight_and_hit_target() {
+fn padded_nested_agent_rows_extend_the_hit_target_but_not_the_highlight() {
     let mut config = padded_config(0, 1);
     config.agent_parent_nesting = true;
     let mut projected = snapshot();
@@ -252,11 +252,20 @@ fn padded_nested_agent_rows_extend_highlight_and_hit_target() {
     // line holding that label goes away.
     assert_eq!(child.height, 1 + 1);
     assert_eq!(child.y, parent.bottom());
-    assert!(row_has_bg(&buffer, parent, parent.y, active));
-    assert!(row_has_bg(&buffer, parent, parent.bottom() - 1, active));
+    // The highlight hugs the content lines and leaves the padding rows unlit.
+    assert!(!row_has_bg(&buffer, parent, parent.y, active));
+    assert!(row_has_bg(&buffer, parent, parent.y + 1, active));
+    assert!(row_has_bg(&buffer, parent, parent.y + 2, active));
+    assert!(!row_has_bg(&buffer, parent, parent.bottom() - 1, active));
+    // It runs through the sidebar separator up to the pane, which the separator glyph
+    // leaves for the unlit rows.
+    let separator = state.hits.sidebar_divider.x;
+    assert_eq!(buffer[(separator, parent.y + 1)].bg, active);
+    assert_eq!(buffer[(separator, parent.y + 1)].symbol(), " ");
+    assert_eq!(buffer[(separator, parent.y)].symbol(), "│");
     assert!(row_text(&buffer, parent, parent.y).trim().is_empty());
     assert!(row_text(&buffer, parent, parent.y + 2).contains("p1"));
-    assert!(row_text(&buffer, child, child.y).contains("╰─"));
+    assert!(row_text(&buffer, child, child.y).contains("┗━━"));
     assert!(!row_has_bg(&buffer, child, child.y, active));
 
     let (toggle, pane_id, _) = &state.hits.agent_group_toggles[0];
@@ -321,7 +330,8 @@ fn padded_rows_apply_to_the_multi_machine_sidebar() {
         .find(|(_, id, _)| *id == endpoint_id)
         .expect("remote agent hit");
     assert_eq!(agent_rect.height, 2 + 2);
-    assert!(row_has_bg(&buffer, *agent_rect, agent_rect.y, active));
+    assert!(!row_has_bg(&buffer, *agent_rect, agent_rect.y, active));
+    assert!(row_has_bg(&buffer, *agent_rect, agent_rect.y + 1, active));
     assert!(row_text(&buffer, *agent_rect, agent_rect.y + 2).contains("remote-agent"));
 }
 
@@ -405,9 +415,9 @@ fn agent_hit(state: &ClientShellState, pane_id: &str) -> Rect {
         .expect("agent hit")
 }
 
-/// The tree column glyphs (columns 1, 3 and 5, under the icons of depth 0, 1 and 2) on row `y`.
+/// The tree column glyphs (columns 1, 4 and 7, under the icons of depth 0, 1 and 2) on row `y`.
 fn tree_columns(buffer: &Buffer, x: u16, y: u16) -> [String; 3] {
-    [1, 3, 5].map(|offset| buffer[(x + offset, y)].symbol().to_string())
+    [1, 4, 7].map(|offset| buffer[(x + offset, y)].symbol().to_string())
 }
 
 fn tree_line_frame(padding: u16, gap: u16) -> (ClientShellState, Buffer) {
@@ -433,25 +443,65 @@ fn padded_nested_agent_rows_keep_tree_lines_continuous() {
     // p1: no line above a top-level row; its line to c1 starts under its icon on its second
     // content row and runs through its bottom padding.
     assert_eq!(col(p1.y), s([" ", " ", " "]));
-    assert_eq!(col(p1.y + 2)[0], "│");
-    assert_eq!(col(p1.bottom() - 1), s(["│", " ", " "]));
+    assert_eq!(col(p1.y + 2)[0], "┃");
+    assert_eq!(col(p1.bottom() - 1), s(["┃", " ", " "]));
     // c1: no top padding; the content row branches, and its bottom padding carries its sibling
     // line (c2 follows) and its own line down to g1.
     assert_eq!(c1.y, p1.bottom());
-    assert_eq!(col(c1.y)[0], "├");
-    assert_eq!(col(c1.bottom() - 1), s(["│", "│", " "]));
+    assert_eq!(col(c1.y)[0], "┣");
+    assert_eq!(col(c1.bottom() - 1), s(["┃", "┃", " "]));
     // g1: the ancestor line of c1 runs through every row, including its content row.
-    assert_eq!(col(g1.y), s(["│", "╰", "●"]));
-    assert_eq!(col(g1.bottom() - 1), s(["│", " ", " "]));
+    assert_eq!(col(g1.y), s(["┃", "┗", "●"]));
+    assert_eq!(col(g1.bottom() - 1), s(["┃", " ", " "]));
     // c2: last child, so nothing continues below its branch.
-    assert_eq!(col(c2.y)[0], "╰");
+    assert_eq!(col(c2.y)[0], "┗");
     assert_eq!(col(c2.bottom() - 1), s([" ", " ", " "]));
     assert_eq!(col(p2.y), s([" ", " ", " "]));
 
-    // Connector glyphs use the existing connector colour.
-    let overlay0 = state.config.palette.overlay0;
-    assert_eq!(buffer[(x + 1, c1.bottom() - 1)].fg, overlay0);
-    assert_eq!(buffer[(x + 1, c1.y)].fg, overlay0);
+    // Every agent here is working, so every connector is the dimmed working color.
+    let working = state.config.palette.yellow;
+    for y in [c1.y, c1.bottom() - 1] {
+        assert_eq!(buffer[(x + 1, y)].fg, working);
+        assert!(buffer[(x + 1, y)].modifier.contains(Modifier::DIM));
+    }
+}
+
+#[test]
+fn tree_lines_take_the_status_color_of_the_row_they_lead_to() {
+    let mut projected = tree_line_snapshot();
+    for (agent, status) in projected.agents.iter_mut().zip([
+        AgentStatus::Idle,
+        AgentStatus::Blocked,
+        AgentStatus::Working,
+        AgentStatus::Idle,
+        AgentStatus::Idle,
+    ]) {
+        agent.agent_status = status;
+    }
+    let mut config = padded_config(0, 1);
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 60).expect("tree line frame");
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    let [p1, c1, g1, c2] = ["p1", "c1", "g1", "c2"].map(|id| agent_hit(&state, id));
+    let palette = &state.config.palette;
+    let (x, rail, inner) = (p1.x + 1, p1.x + 4, p1.x + 7);
+    let fg = |x: u16, y: u16| buffer[(x, y)].fg;
+
+    // p1's line down to c1, and c1's own branch, are blocked red.
+    assert_eq!(fg(x, p1.bottom() - 1), palette.red);
+    assert_eq!(fg(x, c1.y), palette.red);
+    // Below c1 the sibling line leads on to idle c2, and c1's own line down to working g1.
+    assert_eq!(fg(x, c1.bottom() - 1), palette.green);
+    assert_eq!(fg(rail, c1.bottom() - 1), palette.yellow);
+    // Passing g1, the ancestor line still leads to c2; g1's branch is its own status.
+    assert_eq!(fg(x, g1.y), palette.green);
+    assert_eq!(fg(rail, g1.y), palette.yellow);
+    assert_eq!(buffer[(inner, g1.y)].symbol(), "●");
+    assert_eq!(fg(x, c2.y), palette.green);
+    assert!(buffer[(x, c2.y)].modifier.contains(Modifier::DIM));
 }
 
 #[test]
@@ -461,9 +511,9 @@ fn row_gap_rows_between_nested_agents_carry_tree_lines() {
     let x = p1.x;
     let s = |glyphs: [&str; 3]| glyphs.map(str::to_string);
     assert_eq!(c1.y, p1.bottom() + 1);
-    assert_eq!(tree_columns(&buffer, x, p1.bottom()), s(["│", " ", " "]));
-    assert_eq!(tree_columns(&buffer, x, c1.bottom()), s(["│", "│", " "]));
-    assert_eq!(tree_columns(&buffer, x, g1.bottom()), s(["│", " ", " "]));
+    assert_eq!(tree_columns(&buffer, x, p1.bottom()), s(["┃", " ", " "]));
+    assert_eq!(tree_columns(&buffer, x, c1.bottom()), s(["┃", "┃", " "]));
+    assert_eq!(tree_columns(&buffer, x, g1.bottom()), s(["┃", " ", " "]));
     assert_eq!(tree_columns(&buffer, x, c2.bottom()), s([" ", " ", " "]));
     assert_eq!(p2.y, c2.bottom() + 1);
 }
@@ -480,7 +530,7 @@ fn unpadded_flat_agent_rows_draw_no_tree_lines() {
     let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
     for (rect, _) in &state.hits.agents {
         for y in [rect.y, rect.bottom() - 1, rect.bottom()] {
-            assert!(!row_text(&buffer, *rect, y).contains('│'));
+            assert!(!row_text(&buffer, *rect, y).contains(['│', '┃']));
         }
     }
 }

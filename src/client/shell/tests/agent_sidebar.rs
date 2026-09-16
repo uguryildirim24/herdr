@@ -89,7 +89,7 @@ fn byte_identical_rendering_flag_off_vs_flag_on_without_tokens() {
 }
 
 #[test]
-fn parent_with_two_children_expanded_chevron_and_indentation() {
+fn open_parent_toggles_on_its_status_mark_and_indents_children() {
     let config = ClientShellConfig::from_config(&Config::default());
     let area = Rect::new(0, 0, 30, 3);
     let mut buffer = Buffer::empty(area);
@@ -98,17 +98,24 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         pane_id: "parent".into(),
         status: AgentStatus::Working,
         focused: false,
-        rows: vec![vec![crate::ui::ResolvedToken {
-            kind: crate::ui::ResolvedTokenKind::Custom("parent-agent".into()),
-            style: Default::default(),
-        }]],
+        rows: vec![vec![
+            crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::StateIcon,
+                style: Default::default(),
+            },
+            crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Custom("parent-agent".into()),
+                style: Default::default(),
+            },
+        ]],
         depth: 0,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child: false,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
     };
     let child1 = AgentRow {
@@ -121,11 +128,12 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         }]],
         depth: 1,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child: false,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: None,
     };
     let child2 = AgentRow {
@@ -138,11 +146,12 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
         }]],
         depth: 1,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child: true,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: None,
     };
 
@@ -150,71 +159,136 @@ fn parent_with_two_children_expanded_chevron_and_indentation() {
     let c1_toggle = render_agent_row(&mut buffer, Rect::new(0, 1, 30, 1), &child1, &config);
     let c2_toggle = render_agent_row(&mut buffer, Rect::new(0, 2, 30, 1), &child2, &config);
 
-    // Parent row should return toggle hit and display expanded chevron
-    let (toggle_rect, toggle_pane_id, key) = p_toggle.expect("parent toggle hit");
+    // An open parent draws no chevron: its own status mark is the toggle.
+    let [(toggle_rect, toggle_pane_id, key)] = p_toggle.as_slice() else {
+        panic!("one parent toggle, got {p_toggle:?}");
+    };
     assert_eq!(toggle_pane_id, "parent");
     assert_eq!(key, "agent:parent");
-    assert_eq!(toggle_rect, Rect::new(29, 0, 1, 1));
-    assert_eq!(buffer.cell((29, 0)).unwrap().symbol(), "▼");
+    assert_eq!(*toggle_rect, Rect::new(1, 0, 1, 1));
+    assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "●");
+    let parent_text: String = (0..30)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+        .collect();
+    assert!(!parent_text.contains('▼') && !parent_text.contains('▶'));
 
     // Children should have no toggle
-    assert!(c1_toggle.is_none());
-    assert!(c2_toggle.is_none());
+    assert!(c1_toggle.is_empty());
+    assert!(c2_toggle.is_empty());
 
-    // Check tree treatment: child1 gets ├─ , child2 gets ╰─
+    // Check tree treatment: child1 gets ┣━━ , child2 gets ┗━━
     let row1_text: String = (0..30)
         .map(|x| buffer.cell((x, 1)).unwrap().symbol())
         .collect();
     let row2_text: String = (0..30)
         .map(|x| buffer.cell((x, 2)).unwrap().symbol())
         .collect();
-    assert!(row1_text.contains("├─ "));
-    assert!(row2_text.contains("╰─ "));
-    // An open group's chevron is quiet; the tree already shows the group.
-    assert_eq!(buffer.cell((29, 0)).unwrap().fg, config.palette.overlay0);
+    assert!(row1_text.contains("┣━━ "));
+    assert!(row2_text.contains("┗━━ "));
 }
 
 #[test]
-fn collapsed_parent_shows_badge_and_worst_status() {
+fn collapsed_parent_shows_a_dot_stack_of_hidden_statuses() {
     let mut config = ClientShellConfig::from_config(&Config::default());
     config.status_indicators = crate::config::StatusIndicatorStyle::Dots;
     let area = Rect::new(0, 0, 30, 1);
     let mut buffer = Buffer::empty(area);
 
+    // Hidden: one idle, two working, one blocked (indexed by `status_severity`).
     let parent_row = AgentRow {
         pane_id: "parent".into(),
         status: AgentStatus::Done,
         focused: false,
+        rows: vec![vec![
+            crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::StateIcon,
+                style: Default::default(),
+            },
+            crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Custom("parent-agent".into()),
+                style: Default::default(),
+            },
+        ]],
+        depth: 0,
+        collapsed: true,
+        hidden_status_counts: [0, 1, 0, 2, 1],
+        is_last_child: false,
+        tree_lines_above: 0,
+        tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
+        group_key: Some("agent:parent".into()),
+    };
+
+    let toggles = render_agent_row(&mut buffer, area, &parent_row, &config);
+    // Both the parent's own status mark and the dot stack unfold the group.
+    let [(icon_rect, icon_pane_id, icon_key), (stack_rect, stack_pane_id, stack_key)] =
+        toggles.as_slice()
+    else {
+        panic!("icon and stack toggles, got {toggles:?}");
+    };
+    assert_eq!(*icon_rect, Rect::new(1, 0, 1, 1));
+    assert_eq!(
+        (icon_pane_id.as_str(), icon_key.as_str()),
+        ("parent", "agent:parent")
+    );
+    assert_eq!(
+        (stack_pane_id.as_str(), stack_key.as_str()),
+        ("parent", "agent:parent")
+    );
+
+    // Four dots, most urgent first, right-aligned one column in from the edge.
+    assert_eq!(*stack_rect, Rect::new(25, 0, 4, 1));
+    let stack: Vec<_> = (stack_rect.x..stack_rect.right())
+        .map(|x| {
+            let cell = buffer.cell((x, 0)).unwrap();
+            (cell.symbol().to_owned(), cell.fg)
+        })
+        .collect();
+    let palette = &config.palette;
+    assert_eq!(
+        stack,
+        vec![
+            ("●".to_owned(), palette.red),
+            ("●".to_owned(), palette.yellow),
+            ("●".to_owned(), palette.yellow),
+            ("○".to_owned(), palette.green),
+        ]
+    );
+    assert_eq!(buffer.cell((29, 0)).unwrap().symbol(), " ");
+    let text: String = (0..30)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol())
+        .collect();
+    assert!(!text.contains('▶') && !text.contains('▼'));
+}
+
+#[test]
+fn collapsed_parent_dot_stack_is_capped_at_five() {
+    let config = ClientShellConfig::from_config(&Config::default());
+    let area = Rect::new(0, 0, 30, 1);
+    let mut buffer = Buffer::empty(area);
+    let parent_row = AgentRow {
+        pane_id: "parent".into(),
+        status: AgentStatus::Idle,
+        focused: false,
         rows: vec![vec![crate::ui::ResolvedToken {
-            kind: crate::ui::ResolvedTokenKind::Custom("parent-agent".into()),
+            kind: crate::ui::ResolvedTokenKind::StateIcon,
             style: Default::default(),
         }]],
         depth: 0,
         collapsed: true,
-        hidden_descendants: 2,
-        worst_hidden_status: Some(AgentStatus::Blocked),
+        hidden_status_counts: [0, 9, 0, 0, 0],
         is_last_child: false,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
     };
 
-    let toggle = render_agent_row(&mut buffer, area, &parent_row, &config);
-    let (toggle_rect, toggle_pane_id, key) = toggle.expect("collapsed toggle hit");
-    assert_eq!(toggle_pane_id, "parent");
-    assert_eq!(key, "agent:parent");
-
-    // Badge width is 4 + count len = 5
-    assert_eq!(toggle_rect.width, 5);
-    let badge_text: String = (toggle_rect.x..toggle_rect.right())
-        .map(|x| buffer.cell((x, 0)).unwrap().symbol())
-        .collect();
-    assert_eq!(badge_text, "▶ 2 ●");
-
-    // Worst status mark should have blocked color (red)
-    let icon_cell = buffer.cell((toggle_rect.right() - 1, 0)).unwrap();
-    assert_eq!(icon_cell.symbol(), "●");
-    assert_eq!(icon_cell.fg, config.palette.red);
+    let toggles = render_agent_row(&mut buffer, area, &parent_row, &config);
+    let stack_rect = toggles.last().expect("stack toggle").0;
+    assert_eq!(stack_rect, Rect::new(24, 0, 5, 1));
 }
 
 #[test]
@@ -233,11 +307,12 @@ fn depth_four_clamps_to_depth_three_indentation() {
         }]],
         depth: 3,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child: false,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: None,
     };
     let depth_4_row = AgentRow {
@@ -250,16 +325,21 @@ fn depth_four_clamps_to_depth_three_indentation() {
         }]],
         depth: 4,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child: false,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: None,
     };
 
-    assert!(render_agent_row(&mut buffer, Rect::new(0, 0, 30, 1), &depth_3_row, &config).is_none());
-    assert!(render_agent_row(&mut buffer, Rect::new(0, 1, 30, 1), &depth_4_row, &config).is_none());
+    assert!(
+        render_agent_row(&mut buffer, Rect::new(0, 0, 30, 1), &depth_3_row, &config).is_empty()
+    );
+    assert!(
+        render_agent_row(&mut buffer, Rect::new(0, 1, 30, 1), &depth_4_row, &config).is_empty()
+    );
 
     // Indentation prefix should be identical (clamped at depth 3)
     let d3_prefix: String = (0..10)
@@ -269,7 +349,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         .map(|x| buffer.cell((x, 1)).unwrap().symbol())
         .collect();
     assert_eq!(d3_prefix, d4_prefix);
-    assert!(d3_prefix.starts_with("     ├─ "));
+    assert!(d3_prefix.starts_with("       ┣━━"));
 }
 
 #[test]
@@ -395,7 +475,8 @@ fn collapsed_subtree_is_absent_from_navigation_and_hit_map() {
             .iter()
             .map(|(_, pane_id, key)| (pane_id.as_str(), key.as_str()))
             .collect::<Vec<_>>(),
-        vec![("p1", "agent:p1")]
+        // The collapsed parent's status mark and its dot stack.
+        vec![("p1", "agent:p1"), ("p1", "agent:p1")]
     );
 }
 
@@ -433,7 +514,7 @@ fn priority_sort_orders_parents_and_keeps_children_behind_them() {
 }
 
 #[test]
-fn machine_prefixed_group_key_reaches_the_chevron_hit() {
+fn machine_prefixed_group_key_reaches_the_toggle_hit() {
     let mut snapshot = snapshot();
     snapshot.agents = vec![
         tree_agent("p1", AgentStatus::Working, 1, None),
@@ -451,8 +532,8 @@ fn machine_prefixed_group_key_reaches_the_chevron_hit() {
 
     let area = Rect::new(0, 0, 30, 1);
     let mut buffer = Buffer::empty(area);
-    let (_, pane_id, key) =
-        render_agent_row(&mut buffer, area, &rows[0], &config).expect("chevron hit");
+    let toggles = render_agent_row(&mut buffer, area, &rows[0], &config);
+    let (_, pane_id, key) = toggles.first().expect("toggle hit");
     assert_eq!(pane_id, "p1");
     assert_eq!(key, "agent:remote:p1");
 }
@@ -479,11 +560,12 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
         ],
         depth: 1,
         collapsed: false,
-        hidden_descendants: 0,
-        worst_hidden_status: None,
+        hidden_status_counts: Default::default(),
         is_last_child,
         tree_lines_above: 0,
         tree_lines_below: 0,
+        tree_line_status_above: Default::default(),
+        tree_line_status_below: Default::default(),
         group_key: None,
     };
 
@@ -509,10 +591,10 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
     // A non-last child keeps the vertical connector under its branch glyph, which hangs from
     // the parent's icon column, and continuation rows start their text where a child's name
     // starts after its icon.
-    assert!(row(0).starts_with(" ├─ first"));
-    assert!(row(1).starts_with(" │   second"));
-    assert!(row(2).starts_with(" ╰─ first"));
-    assert!(row(3).starts_with("     second"));
+    assert!(row(0).starts_with(" ┣━━ first"));
+    assert!(row(1).starts_with(" ┃    second"));
+    assert!(row(2).starts_with(" ┗━━ first"));
+    assert!(row(3).starts_with("      second"));
 }
 
 #[test]
@@ -605,19 +687,24 @@ fn compact_sidebar_nests_children_after_their_parent_with_tree_marks() {
     let (buffer, hits) = render_compact(&snapshot, &config, &HashSet::new(), area);
 
     let y = COMPACT_AGENT_Y;
-    // A parent with visible children puts the `▼` collapse toggle in the tree column.
+    // A parent draws like a flat cell; its status mark is the collapse toggle.
     assert_eq!(
         compact_line(&buffer, y, 3),
-        format!("▼1{}", icon(AgentStatus::Working))
+        format!("1 {}", icon(AgentStatus::Working))
     );
-    assert_eq!(buffer[(0, y)].fg, config.palette.accent);
     assert_eq!(
         compact_line(&buffer, y + 1, 3),
-        format!("├2{}", icon(AgentStatus::Blocked))
+        format!("┣2{}", icon(AgentStatus::Blocked))
     );
+    // A child's tree mark takes its own status color, dimmed like the expanded branches.
+    assert_eq!(
+        buffer[(0, y + 1)].fg,
+        status_color(AgentStatus::Blocked, &config.palette)
+    );
+    assert!(buffer[(0, y + 1)].modifier.contains(Modifier::DIM));
     assert_eq!(
         compact_line(&buffer, y + 2, 3),
-        format!("└3{}", icon(AgentStatus::Done))
+        format!("┗3{}", icon(AgentStatus::Done))
     );
     assert_eq!(
         compact_line(&buffer, y + 3, 3),
@@ -633,7 +720,7 @@ fn compact_sidebar_nests_children_after_their_parent_with_tree_marks() {
     assert_eq!(
         hits.agent_group_toggles,
         vec![(
-            Rect::new(0, y, 1, 1),
+            Rect::new(2, y, 1, 1),
             "p1".to_string(),
             "agent:p1".to_string()
         )]
@@ -661,15 +748,19 @@ fn compact_sidebar_collapsed_parent_hides_children_behind_a_roll_up_cell() {
         compact_line(&buffer, y, 3),
         format!("1 {}", icon(AgentStatus::Working))
     );
+    // The hidden children show as their status dots, most urgent first, right-aligned.
     assert_eq!(
         compact_line(&buffer, y + 1, 3),
-        format!("▶2{}", icon(AgentStatus::Blocked))
+        format!(" {}{}", icon(AgentStatus::Blocked), icon(AgentStatus::Done))
+    );
+    assert_eq!(
+        buffer[(1, y + 1)].fg,
+        status_color(AgentStatus::Blocked, &config.palette)
     );
     assert_eq!(
         buffer[(2, y + 1)].fg,
-        status_color(AgentStatus::Blocked, &config.palette)
+        status_color(AgentStatus::Done, &config.palette)
     );
-    assert_eq!(buffer[(0, y + 1)].fg, config.palette.accent);
     // The roll-up line carries no number, so the next agent keeps index 2 like the
     // visible order that indexed focus uses.
     assert_eq!(
@@ -683,18 +774,18 @@ fn compact_sidebar_collapsed_parent_hides_children_behind_a_roll_up_cell() {
             .collect::<Vec<_>>(),
         vec!["p1", "p2"]
     );
+    let toggle = |rect| (rect, "p1".to_string(), "agent:p1".to_string());
     assert_eq!(
         hits.agent_group_toggles,
-        vec![(
-            Rect::new(0, y + 1, 3, 1),
-            "p1".to_string(),
-            "agent:p1".to_string()
-        )]
+        vec![
+            toggle(Rect::new(2, y, 1, 1)),
+            toggle(Rect::new(0, y + 1, 3, 1))
+        ]
     );
 }
 
 #[test]
-fn compact_sidebar_roll_up_count_stays_one_column_past_nine() {
+fn compact_sidebar_roll_up_shows_at_most_three_dots() {
     let mut snapshot = snapshot();
     snapshot.agents = std::iter::once(tree_agent("p1", AgentStatus::Idle, 0, None))
         .chain(
@@ -710,10 +801,7 @@ fn compact_sidebar_roll_up_count_stays_one_column_past_nine() {
 
     assert_eq!(
         compact_line(&buffer, COMPACT_AGENT_Y + 1, 3),
-        format!(
-            "▶+{}",
-            status_icon(AgentStatus::Working, config.status_indicators)
-        )
+        status_icon(AgentStatus::Working, config.status_indicators).repeat(3)
     );
 }
 
@@ -786,11 +874,20 @@ fn compact_sidebar_clamps_marks_and_roll_up_to_narrow_widths() {
     }
 
     let collapsed: HashSet<String> = ["agent:p1".to_string()].into_iter().collect();
+    let icon = |status| status_icon(status, config.status_indicators);
+    // Too narrow for the parent's status mark, so the roll-up is the only toggle left.
     let (buffer, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 3, 20));
-    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 2), "▶2");
+    assert_eq!(
+        compact_line(&buffer, COMPACT_AGENT_Y + 1, 2),
+        format!("{}{}", icon(AgentStatus::Blocked), icon(AgentStatus::Done))
+    );
+    assert_eq!(hits.agent_group_toggles.len(), 1);
     assert_eq!(hits.agent_group_toggles[0].0.width, 2);
     let (buffer, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 2, 20));
-    assert_eq!(compact_line(&buffer, COMPACT_AGENT_Y + 1, 1), "▶");
+    assert_eq!(
+        compact_line(&buffer, COMPACT_AGENT_Y + 1, 1),
+        icon(AgentStatus::Blocked)
+    );
     assert_eq!(hits.agent_group_toggles[0].0.width, 1);
     let (_, hits) = render_compact(&snapshot, &config, &collapsed, Rect::new(0, 0, 1, 20));
     assert!(hits.agent_group_toggles.is_empty());
@@ -813,8 +910,8 @@ fn compact_sidebar_marks_deeper_levels_by_their_own_siblings() {
     let marks = (0..4)
         .map(|line| buffer[(0, COMPACT_AGENT_Y + line)].symbol().to_string())
         .collect::<Vec<_>>();
-    // c1 is itself a parent with a visible child, so it shows the collapse toggle.
-    assert_eq!(marks, vec!["▼", "▼", "└", "└"]);
+    // c1 has a sibling after it, g1 is the last child of c1, and c2 the last child of p1.
+    assert_eq!(marks, vec!["1", "┣", "┗", "┗"]);
 }
 
 #[test]
@@ -897,18 +994,19 @@ fn compact_sidebar_collapse_marker_toggles_the_shared_group_state() {
     assert_eq!(
         state.hits.agent_group_toggles,
         vec![(
-            Rect::new(0, parent_y, 1, 1),
+            Rect::new(2, parent_y, 1, 1),
             "p1".to_string(),
             "agent:p1".to_string()
         )]
     );
 
-    // `▼` collapses through the same `collapsed_groups` key the expanded panel uses.
-    let outcome = compact_click(&mut state, 0, parent_y);
+    // The parent's status mark collapses through the same `collapsed_groups` key the
+    // expanded panel uses.
+    let outcome = compact_click(&mut state, 2, parent_y);
     assert!(outcome.actions.is_empty(), "the toggle must not focus");
     assert!(state.collapsed_groups.contains("agent:p1"));
     state.compose(106, 30).expect("collapsed compact frame");
-    let (roll_up, _, key) = state.hits.agent_group_toggles[0].clone();
+    let (roll_up, _, key) = state.hits.agent_group_toggles[1].clone();
     assert_eq!(key, "agent:p1");
     assert_eq!(roll_up.y, parent_y + 1);
     assert_eq!(
@@ -954,6 +1052,24 @@ fn compact_sidebar_collapse_marker_toggles_the_shared_group_state() {
 }
 
 #[test]
+fn compact_sidebar_focused_agent_highlight_reaches_the_pane() {
+    let mut snapshot = compact_nesting_snapshot();
+    snapshot.agents[1].focused = true;
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+
+    let (buffer, _) = render_compact(&snapshot, &config, &HashSet::new(), Rect::new(0, 0, 4, 20));
+
+    let active = config.palette.active_row_bg;
+    // p2 sorts last: p1, c1, c2, p2.
+    let y = COMPACT_AGENT_Y + 3;
+    assert!((0..4).all(|x| buffer[(x, y)].bg == active));
+    assert_eq!(buffer[(3, y)].symbol(), " ");
+    assert_eq!(buffer[(3, y - 1)].symbol(), "│");
+    assert_ne!(buffer[(3, y - 1)].bg, active);
+}
+
+#[test]
 fn compact_sidebar_numbers_children_past_nine_like_flat_cells() {
     let mut snapshot = snapshot();
     snapshot.agents = std::iter::once(tree_agent("p1", AgentStatus::Idle, 0, None))
@@ -976,7 +1092,7 @@ fn compact_sidebar_numbers_children_past_nine_like_flat_cells() {
     );
 
     let first = hits.agents[0].0.y;
-    assert_eq!(compact_line(&buffer, first + 8, 3), format!("├9{icon}"));
+    assert_eq!(compact_line(&buffer, first + 8, 3), format!("┣9{icon}"));
     // Index 10 and up: the two-digit index takes the tree column, exactly like the flat list.
     for index in [10u16, 11, 12] {
         let y = first + index - 1;
