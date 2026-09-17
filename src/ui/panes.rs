@@ -449,6 +449,8 @@ struct LineCell {
     down: bool,
     left: bool,
     right: bool,
+    /// Part of a pane's bottom border, drawn on the cell's bottom edge.
+    bottom_edge: bool,
 }
 
 fn render_pane_borders(
@@ -481,18 +483,25 @@ fn render_pane_borders(
         let focused = pane_infos
             .iter()
             .any(|info| info.is_focused && line_touches_pane(x, y, info, app.pane_gaps));
-        let symbol = line_cell_symbol(line);
-        if symbol.is_empty() {
-            continue;
-        }
-        let cell = &mut buf[(x, y)];
-        cell.set_symbol(symbol);
         let color = if focused {
             app.palette.accent
         } else {
             app.palette.overlay0
         };
-        cell.set_style(Style::default().fg(color));
+        let (symbol, underline) =
+            bottom_edge_cell_symbol(line).unwrap_or((line_cell_symbol(line), false));
+        if symbol.is_empty() {
+            continue;
+        }
+        let mut style = Style::default().fg(color);
+        if underline {
+            style = style
+                .add_modifier(Modifier::UNDERLINED)
+                .underline_color(color);
+        }
+        let cell = &mut buf[(x, y)];
+        cell.set_symbol(symbol);
+        cell.set_style(style);
     }
 
     render_pane_border_titles(app, ws, pane_infos, frame);
@@ -578,6 +587,7 @@ fn add_pane_border_cells(
             let cell = cells.entry((x, bottom)).or_default();
             cell.left |= x > rect.x;
             cell.right |= x < right;
+            cell.bottom_edge |= bottom > rect.y;
         }
     }
     if info.borders.contains(Borders::LEFT) {
@@ -670,6 +680,22 @@ fn render_pane_border_titles(
             end_x.saturating_sub(start_x) as usize,
             style,
         );
+    }
+}
+
+/// Bottom borders sit on the bottom edge of their row so the frame reaches the
+/// end of the window. The corners are Ghostty's light "vertical and bottom"
+/// sprites; the run between them is an underline in the border color.
+fn bottom_edge_cell_symbol(line: LineCell) -> Option<(&'static str, bool)> {
+    if !line.bottom_edge || line.down {
+        return None;
+    }
+    match (line.up, line.left, line.right) {
+        (true, false, true) => Some(("\u{1CE17}", false)),
+        (true, true, false) => Some(("\u{1CE19}", false)),
+        (true, true, true) => Some(("│", true)),
+        (false, true, _) | (false, _, true) => Some((" ", true)),
+        _ => None,
     }
 }
 
@@ -1165,6 +1191,112 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(1, 1)].style().fg, Some(app.palette.accent));
         assert_eq!(buffer[(2, 1)].style().fg, Some(app.palette.overlay0));
+    }
+
+    #[test]
+    fn pane_bottom_border_sits_on_the_bottom_edge_of_its_row() {
+        let mut app = AppState::test_new();
+        app.pane_gaps = true;
+        app.view.terminal_area = Rect::new(0, 0, 9, 3);
+        app.view.pane_infos = vec![
+            PaneInfo {
+                id: PaneId::from_raw(1),
+                rect: Rect::new(0, 0, 4, 3),
+                inner_rect: Rect::default(),
+                scrollbar_rect: None,
+                borders: Borders::ALL,
+                is_focused: true,
+            },
+            PaneInfo {
+                id: PaneId::from_raw(2),
+                rect: Rect::new(5, 0, 4, 3),
+                inner_rect: Rect::default(),
+                scrollbar_rect: None,
+                borders: Borders::ALL,
+                is_focused: false,
+            },
+        ];
+        let ws = Workspace::test_new("test");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(9, 3)).unwrap();
+
+        terminal
+            .draw(|frame| render_view_pane_borders(&app, &ws, &[], frame))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| (0..4).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0), "┌──┐");
+        assert_eq!(row(1), "│  │");
+        assert_eq!(row(2), "\u{1CE17}  \u{1CE19}");
+        for x in [1, 2] {
+            let style = buffer[(x, 2)].style();
+            assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(style.fg, Some(app.palette.accent));
+            assert_eq!(style.underline_color, Some(app.palette.accent));
+        }
+        for x in [0, 3] {
+            assert!(!buffer[(x, 2)]
+                .style()
+                .add_modifier
+                .contains(Modifier::UNDERLINED));
+        }
+        assert_eq!(
+            buffer[(6, 2)].style().underline_color,
+            Some(app.palette.overlay0)
+        );
+        assert!(!buffer[(6, 0)]
+            .style()
+            .add_modifier
+            .contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn shared_bottom_border_junction_keeps_its_divider_on_the_bottom_edge() {
+        let mut app = AppState::test_new();
+        app.view.terminal_area = Rect::new(0, 0, 5, 3);
+        app.view.pane_infos = vec![
+            PaneInfo {
+                id: PaneId::from_raw(1),
+                rect: Rect::new(0, 0, 2, 3),
+                inner_rect: Rect::default(),
+                scrollbar_rect: None,
+                borders: Borders::TOP | Borders::LEFT | Borders::BOTTOM,
+                is_focused: false,
+            },
+            PaneInfo {
+                id: PaneId::from_raw(2),
+                rect: Rect::new(2, 0, 3, 3),
+                inner_rect: Rect::default(),
+                scrollbar_rect: None,
+                borders: Borders::ALL,
+                is_focused: false,
+            },
+        ];
+        let split_borders = vec![crate::layout::SplitBorder {
+            pos: 2,
+            direction: ratatui::layout::Direction::Horizontal,
+            ratio: 0.5,
+            area: Rect::new(0, 0, 5, 3),
+            path: vec![],
+        }];
+        let ws = Workspace::test_new("test");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(5, 3)).unwrap();
+
+        terminal
+            .draw(|frame| render_view_pane_borders(&app, &ws, &split_borders, frame))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, 0)].symbol(), "┬");
+        assert_eq!(buffer[(2, 2)].symbol(), "│");
+        assert!(buffer[(2, 2)]
+            .style()
+            .add_modifier
+            .contains(Modifier::UNDERLINED));
+        assert_eq!(buffer[(0, 2)].symbol(), "\u{1CE17}");
+        assert_eq!(buffer[(4, 2)].symbol(), "\u{1CE19}");
     }
 
     #[tokio::test]
