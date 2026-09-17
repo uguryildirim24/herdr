@@ -1424,6 +1424,17 @@
             "on",
             "off"
           ]
+        },
+        {
+          "key": "ui.sound.agents.chatgpt",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected ChatGPT agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
         }
       ]
     },
@@ -1502,6 +1513,12 @@
           "type": "boolean",
           "default": "false",
           "description": "Prompt a parent agent with BLOCKED <child> or GONE <child> when a nested child agent blocks, exits, or closes."
+        },
+        {
+          "key": "experimental.pane_graphics_detection",
+          "type": "boolean",
+          "default": "false",
+          "description": "Read the state of agents drawn as pane graphics, such as a `chatgpt` browser chat, from their frame pixels."
         },
         {
           "key": "experimental.pane_history",

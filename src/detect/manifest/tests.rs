@@ -360,6 +360,31 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
 }
 
 #[test]
+fn chatgpt_manifest_maps_graphics_button_lines() {
+    use crate::graphics_detection::Glyph;
+
+    let stop = explain(Agent::Chatgpt, Glyph::Stop.detection_line());
+    assert_eq!(stop.state, AgentState::Working);
+    assert_eq!(
+        stop.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("composer_stop_button")
+    );
+    for (glyph, rule) in [
+        (Glyph::Waveform, "composer_voice_button"),
+        (Glyph::Arrow, "composer_send_button"),
+    ] {
+        let idle = explain(Agent::Chatgpt, glyph.detection_line());
+        assert_eq!(idle.state, AgentState::Idle);
+        assert_eq!(idle.matched_rule.map(|rule| rule.id).as_deref(), Some(rule));
+    }
+    let terminal_text = explain(
+        Agent::Chatgpt,
+        "$ terminal-browser open https://chatgpt.com",
+    );
+    assert!(terminal_text.matched_rule.is_none());
+}
+
+#[test]
 fn muse_manifest_requires_complete_live_controls() {
     let working = explain(
         Agent::Muse,

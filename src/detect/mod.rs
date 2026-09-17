@@ -64,10 +64,13 @@ pub enum Agent {
     Qwen,
     Maki,
     Muse,
+    /// A ChatGPT web chat drawn as pane graphics, for example by a terminal
+    /// browser. Its state is read from the frames' composer button.
+    Chatgpt,
 }
 
 impl Agent {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -91,9 +94,10 @@ impl Agent {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        Self::Chatgpt,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -115,6 +119,7 @@ impl Agent {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        Self::Chatgpt,
     ];
 }
 
@@ -143,11 +148,14 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Chatgpt => "chatgpt",
     }
 }
 
-pub fn interactive_agent_executable(agent: Agent) -> &'static str {
-    match agent {
+/// The executable `agent start` launches for a kind, or `None` for agents that
+/// are not started as a terminal program, such as a `chatgpt` browser chat.
+pub fn interactive_agent_executable(agent: Agent) -> Option<&'static str> {
+    let executable = match agent {
         Agent::Pi => "pi",
         Agent::Claude => "claude",
         Agent::Codex => "codex",
@@ -177,7 +185,9 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
-    }
+        Agent::Chatgpt => return None,
+    };
+    Some(executable)
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
@@ -216,6 +226,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        "chatgpt" => Some(Agent::Chatgpt),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -237,7 +248,9 @@ fn is_muse_versioned_binary(name: &str) -> bool {
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.
 pub fn identify_agent(process_name: &str) -> Option<Agent> {
-    parse_agent_label(process_name)
+    // A browser chat has no process of its own; only an explicit
+    // `HERDR_AGENT=chatgpt` hint selects it, never a program named `chatgpt`.
+    parse_agent_label(process_name).filter(|agent| *agent != Agent::Chatgpt)
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
@@ -805,6 +818,8 @@ mod tests {
         assert_eq!(identify_agent("muse"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-code"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
+        assert_eq!(identify_agent("chatgpt"), None);
+        assert_eq!(parse_agent_label("chatgpt"), Some(Agent::Chatgpt));
         assert_eq!(identify_agent("muse-bin-0.1.0-R708.1"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-bin-1.2.3"), Some(Agent::Muse));
         assert_eq!(
@@ -887,10 +902,11 @@ mod tests {
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
         ];
-        assert_eq!(expected.len(), Agent::ALL.len());
+        assert_eq!(expected.len() + 1, Agent::ALL.len());
         for (agent, executable) in expected {
-            assert_eq!(interactive_agent_executable(agent), executable);
+            assert_eq!(interactive_agent_executable(agent), Some(executable));
         }
+        assert_eq!(interactive_agent_executable(Agent::Chatgpt), None);
     }
 
     #[test]

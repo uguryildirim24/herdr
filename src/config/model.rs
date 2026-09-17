@@ -1047,6 +1047,9 @@ pub struct ExperimentalConfig {
     /// Prompt a parent agent with `BLOCKED <child>` / `GONE <child>` when a
     /// nested child agent blocks, exits, or closes. Default: false.
     pub agent_parent_notify: bool,
+    /// Read the state of agents drawn as pane graphics, such as a `chatgpt`
+    /// browser chat, from their frame pixels. Default: false.
+    pub pane_graphics_detection: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.
@@ -2076,6 +2079,19 @@ pane_history = true
         let config: Config = toml::from_str(toml).unwrap();
 
         assert!(config.experimental.pane_history);
+    }
+
+    #[test]
+    fn pane_graphics_detection_is_opt_in() {
+        assert!(!Config::default().experimental.pane_graphics_detection);
+
+        let toml = r#"
+[experimental]
+pane_graphics_detection = true
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+
+        assert!(config.experimental.pane_graphics_detection);
     }
 
     #[test]

@@ -119,7 +119,7 @@ impl Lease {
         let _keep_generation_alive = &self.inner.generation;
         validate_path_identity(&self.inner.path, &self.inner.metadata)?;
         let mut data = vec![0; self.inner.len];
-        read_exact_at(&self.inner.file, &mut data)?;
+        read_exact_at(&self.inner.file, &mut data, 0)?;
         if has_byte_at(&self.inner.file, self.inner.len as u64)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -129,6 +129,23 @@ impl Lease {
         validate_metadata(&self.inner.file.metadata()?, self.inner.len)?;
         validate_path_identity(&self.inner.path, &self.inner.metadata)?;
         Ok(data)
+    }
+
+    /// Reads part of the leased frame into `data`, starting at byte `offset`.
+    /// Unlike [`Lease::copy_rgba`] it skips the identity checks: it serves
+    /// samplers that tolerate a torn read and must not pay for copying or
+    /// validating the whole frame.
+    pub(crate) fn read_at(&self, offset: usize, data: &mut [u8]) -> io::Result<()> {
+        let within = offset
+            .checked_add(data.len())
+            .is_some_and(|end| end <= self.inner.len);
+        if !within {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read outside the leased frame",
+            ));
+        }
+        read_exact_at(&self.inner.file, data, offset as u64)
     }
 }
 
@@ -213,12 +230,12 @@ fn runtime_base() -> PathBuf {
 }
 
 #[cfg(unix)]
-fn read_exact_at(file: &File, data: &mut [u8]) -> io::Result<()> {
-    file.read_exact_at(data, 0)
+fn read_exact_at(file: &File, data: &mut [u8], offset: u64) -> io::Result<()> {
+    file.read_exact_at(data, offset)
 }
 
 #[cfg(not(unix))]
-fn read_exact_at(_file: &File, _data: &mut [u8]) -> io::Result<()> {
+fn read_exact_at(_file: &File, _data: &mut [u8], _offset: u64) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "Unix only"))
 }
 
@@ -398,6 +415,21 @@ mod tests {
         validate_directory(&source).unwrap();
         drop(store);
         assert!(!source.exists());
+        let _ = fs::remove_dir(base);
+    }
+
+    #[test]
+    fn lease_reads_ranges_only_inside_the_frame() {
+        let (store, base) = store();
+        let path = frame(&store, "frame", &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let lease = store.lease(&path, 8).unwrap();
+        let mut data = [0; 3];
+        lease.read_at(4, &mut data).unwrap();
+        assert_eq!(data, [5, 6, 7]);
+        assert!(lease.read_at(6, &mut data).is_err());
+        assert!(lease.read_at(usize::MAX, &mut data).is_err());
+        drop(lease);
+        drop(store);
         let _ = fs::remove_dir(base);
     }
 

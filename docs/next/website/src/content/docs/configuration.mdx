@@ -578,6 +578,17 @@ The legacy `experimental.kitty_graphics` setting remains accepted for existing c
 
 Changing this setting requires restarting the affected Herdr server or reattaching the client. In remote sessions, the server's setting controls pane graphics parsing and API availability, while the local client's setting controls output to the outer terminal.
 
+### Agent state from pane graphics (experimental)
+
+A ChatGPT web chat drawn into a pane as file-backed pane graphics, for example by a terminal browser, has no terminal text to detect. Herdr can read its state from the frame pixels instead:
+
+```toml
+[experimental]
+pane_graphics_detection = true
+```
+
+The default value is `false`. The setting is read by the server and applies after `herdr server reload-config`. See [Agents: graphics-drawn chats](/docs/agents/#graphics-drawn-chats) for how a pane becomes a `chatgpt` agent and which states are read.
+
 ## Agent session restore
 
 Herdr resumes supported Agent conversations after a server restart by default:

@@ -20,6 +20,17 @@ pub(crate) use super::unix_common::{
     wait_client_stream_readable, StatusCommandGuard,
 };
 
+/// Moves the calling thread to the background QoS class, so macOS keeps it on
+/// efficiency cores and behind interactive work. Best effort.
+pub(crate) fn lower_current_thread_priority() {
+    // SAFETY: only changes the QoS class of the calling thread.
+    let result =
+        unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0) };
+    if result != 0 {
+        tracing::debug!(result, "failed to lower background thread QoS");
+    }
+}
+
 const PROC_PGRP_ONLY: u32 = 2;
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
 
