@@ -537,7 +537,7 @@ fn collect_visible_placements(
             .filter_map(|((pane_id, layer_id), slot)| {
                 (*pane_id == info.id)
                     .then(|| {
-                        slot.layer.as_ref().and_then(|layer| {
+                        slot.presented_layer().and_then(|layer| {
                             (!layer.terminal_only() || slot.direct_client() == Some(client_id))
                                 .then_some((layer_id, slot.host_image_id, layer))
                         })

@@ -201,6 +201,16 @@ impl ClientState {
             .collect::<Vec<_>>();
         self.stale_images.extend(unclaimed);
         self.trusted_direct.clear();
+        if !self.stale_images.is_empty() {
+            // Host image ids are hashed, so a superseded asset can share its id with an asset this
+            // scene still needs. Deleting that id would drop the needed image from the host.
+            let desired_ids = desired
+                .iter()
+                .map(|key| host_image_id(&self.scope, key))
+                .collect::<HashSet<_>>();
+            self.stale_images
+                .retain(|image_id| !desired_ids.contains(image_id));
+        }
         let placed = scene
             .placements
             .iter()
@@ -532,14 +542,18 @@ pub(crate) fn collect_scene(
             placement.x,
         )
     });
+    // Retain both the presented confirmed direct frame and the frame awaiting host confirmation, so
+    // the client keeps both host images until the placement moves to the confirmed replacement.
     let mut retained_assets = app
         .pane_graphics
         .slots
         .iter()
-        .filter_map(|(key, slot)| {
-            let layer = slot.layer.as_ref()?;
-            (slot.direct_client() == Some(client_id))
-                .then(|| pane_layer_asset_key(app, key, layer))?
+        .filter(|(_, slot)| slot.direct_client() == Some(client_id))
+        .flat_map(|(key, slot)| {
+            [slot.confirmed_direct.as_ref(), slot.layer.as_ref()]
+                .into_iter()
+                .flatten()
+                .filter_map(move |layer| pane_layer_asset_key(app, key, layer))
         })
         .collect::<Vec<_>>();
     retained_assets.sort_by_key(|key| format!("{:?}", key.source));
@@ -1262,6 +1276,68 @@ mod tests {
         );
         let bytes = String::from_utf8_lossy(&bytes);
         assert!(bytes.contains(&format!("a=d,d=I,i={image_id}")), "{bytes}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn superseded_direct_asset_sharing_a_host_image_id_does_not_delete_its_replacement() {
+        let scope = "endpoint-a:boot-1";
+        let key = |fingerprint| {
+            asset(
+                SurfaceGraphicsTarget::Pane {
+                    pane_id: "w1:p1".into(),
+                },
+                fingerprint,
+                vec![0; 4],
+            )
+            .key
+        };
+        let mut seen = HashMap::new();
+        let (previous, next) = (0..u64::from(u32::MAX))
+            .find_map(|fingerprint| {
+                seen.insert(host_image_id(scope, &key(fingerprint)), fingerprint)
+                    .map(|other| (key(other), key(fingerprint)))
+            })
+            .expect("hashed host image ids collide");
+        let image_id = host_image_id(scope, &previous);
+        let direct_scene = |placed: &SurfaceGraphicsAssetKey, retained| {
+            let mut graphics = scene(
+                SurfaceGraphicsAsset {
+                    key: placed.clone(),
+                    data: Vec::new(),
+                },
+                0,
+                0,
+            );
+            graphics.assets.clear();
+            graphics.retained_assets = retained;
+            graphics
+        };
+        let cell = HostCellSize {
+            width_px: 8,
+            height_px: 16,
+        };
+        let mut state = ClientState::default();
+        state.set_scope(scope);
+        let _ = state.take_pending_cleanup();
+        state.set_scene(direct_scene(
+            &previous,
+            vec![previous.clone(), next.clone()],
+        ));
+        assert!(state.trust_direct_asset(&previous, image_id));
+        let _ = state.encode(Visibility::Main, (0, 0), None, cell);
+
+        // The replacement landed under the same host id, so retiring the previous asset must not
+        // delete that id.
+        assert!(state.trust_direct_asset(&next, image_id));
+        state.set_scene(direct_scene(&next, vec![next.clone()]));
+        let swapped =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), None, cell)).unwrap();
+        assert!(
+            !swapped.contains(&format!("a=d,d=I,i={image_id},")),
+            "{swapped}"
+        );
+        assert!(swapped.contains(&format!("a=p,i={image_id},")), "{swapped}");
     }
 
     #[test]

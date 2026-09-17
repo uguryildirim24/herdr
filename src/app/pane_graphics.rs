@@ -43,6 +43,9 @@ pub(crate) struct DirectGate {
 pub(crate) struct Slot {
     pub(crate) host_image_id: u32,
     pub(crate) layer: Option<Layer>,
+    /// Last host-confirmed direct frame. While `layer` holds a newer direct frame that the host
+    /// terminal has not confirmed yet, this frame stays presented so the pane never shows a gap.
+    pub(crate) confirmed_direct: Option<Layer>,
     pub(crate) stream_owner: Option<String>,
     pub(crate) stream_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) direct_gate: Option<DirectGate>,
@@ -54,10 +57,44 @@ impl Slot {
         Self {
             host_image_id,
             layer,
+            confirmed_direct: None,
             stream_owner: None,
             stream_active: None,
             direct_gate: None,
         }
+    }
+
+    /// Replace the stream frame. A direct frame awaiting host confirmation keeps the last
+    /// confirmed direct frame presented; any other frame supersedes it immediately.
+    pub(crate) fn replace_stream_layer(&mut self, layer: Layer) {
+        let awaiting_confirmation = layer.direct_lease().is_some();
+        let previous = self.layer.replace(layer);
+        let confirmed = self.confirmed_direct.take();
+        if awaiting_confirmation {
+            self.confirmed_direct = previous
+                .filter(|previous| previous.resident_client().is_some())
+                .or(confirmed);
+        }
+        self.direct_gate = None;
+    }
+
+    /// Adopt the host-confirmed direct frame as resident, retiring the frame it replaces.
+    pub(crate) fn confirm_direct_layer(&mut self, client_id: u64) {
+        if let Some(layer) = self.layer.as_mut() {
+            layer.mark_resident(client_id);
+        }
+        self.confirmed_direct = None;
+    }
+
+    /// The frame to present: the pending direct frame's confirmed predecessor while one exists.
+    pub(crate) fn presented_layer(&self) -> Option<&Layer> {
+        let layer = self.layer.as_ref()?;
+        if layer.direct_lease().is_some() {
+            if let Some(confirmed) = self.confirmed_direct.as_ref() {
+                return Some(confirmed);
+            }
+        }
+        Some(layer)
     }
 
     pub(crate) fn stream_is_active(&self) -> bool {
@@ -294,6 +331,7 @@ mod tests {
                 Slot {
                     host_image_id: (1 << 31) | id,
                     layer: None,
+                    confirmed_direct: None,
                     stream_owner: Some("shared-owner".into()),
                     stream_active: None,
                     direct_gate: None,
