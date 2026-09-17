@@ -20,7 +20,12 @@ pub(super) fn render_collapsed(
         let active = &endpoint.endpoint_id == state.active_endpoint_id;
         let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
         if active && collapsed {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+            super::render::highlight_sidebar_row(
+                buffer,
+                rect,
+                workspace_area.right(),
+                palette.active_row_bg,
+            );
         }
         let label = if endpoint.endpoint_id.is_local() {
             "L".to_owned()
@@ -62,7 +67,12 @@ pub(super) fn render_collapsed(
             let rect = Rect::new(workspace_area.x, y, workspace_area.width, 1);
             let focused = active && workspace.focused;
             if focused {
-                buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+                super::render::highlight_sidebar_row(
+                    buffer,
+                    rect,
+                    workspace_area.right(),
+                    palette.active_row_bg,
+                );
             }
             let stale = endpoint.status != ClientEndpointStatus::Online;
             let number = format!(" {}", workspace.number);
@@ -294,7 +304,8 @@ pub(super) fn render_expanded(
                     rect,
                     marker,
                     endpoint,
-                    collapsed && &endpoint.endpoint_id == state.active_endpoint_id,
+                    (collapsed && &endpoint.endpoint_id == state.active_endpoint_id)
+                        .then_some(body.right()),
                     palette,
                 );
                 hits.machines.push(MachineHit {
@@ -331,7 +342,12 @@ pub(super) fn render_expanded(
                 let endpoint_active = &endpoint.endpoint_id == state.active_endpoint_id;
                 if endpoint_active && workspace.focused {
                     // Padding rows carry the highlight; content rows are repainted below.
-                    buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
+                    super::render::highlight_sidebar_row(
+                        buffer,
+                        nested,
+                        body.right(),
+                        palette.active_row_bg,
+                    );
                 }
                 super::sidebar::render_workspace_rows(
                     buffer,
@@ -447,11 +463,12 @@ fn render_endpoint_row(
     rect: Rect,
     marker: &str,
     endpoint: &ClientShellEndpoint,
-    highlighted: bool,
+    // The separator column when the row is highlighted.
+    highlight_to: Option<u16>,
     palette: &Palette,
 ) {
-    if highlighted {
-        buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+    if let Some(separator_x) = highlight_to {
+        super::render::highlight_sidebar_row(buffer, rect, separator_x, palette.active_row_bg);
     }
     let (glyph, state, color) = endpoint_status_presentation(endpoint.status, palette);
     let state = if endpoint.status == ClientEndpointStatus::Online {

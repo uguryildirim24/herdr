@@ -20,14 +20,11 @@ pub(super) struct AgentRow {
     /// Hidden descendants per status while this row is collapsed; drawn as its dot stack.
     pub(super) hidden_status_counts: super::agent_tree::StatusCounts,
     pub(super) is_last_child: bool,
-    /// Tree lines passing between the previous visible row and this one, and between this
-    /// row and the next (see `agent_tree::tree_lines_below`). Zero outside nesting.
-    pub(super) tree_lines_above: u8,
+    /// Tree lines passing between this row and the next (see
+    /// `agent_tree::tree_lines_below`). Zero outside nesting.
     pub(super) tree_lines_below: u8,
-    /// Status of the row each line in `tree_lines_above`/`tree_lines_below` leads to, per
-    /// column; a line is drawn in that row's status color. `None` where no line runs.
-    pub(super) tree_line_status_above:
-        [Option<crate::api::schema::AgentStatus>; super::agent_tree::TREE_LINE_COLUMNS],
+    /// Status of the row each line in `tree_lines_below` leads to, per column; a line is
+    /// drawn in that row's status color. `None` where no line runs.
     pub(super) tree_line_status_below:
         [Option<crate::api::schema::AgentStatus>; super::agent_tree::TREE_LINE_COLUMNS],
     /// `collapsed_groups` key for this row; `Some` only when the row has children.
@@ -255,17 +252,13 @@ pub(super) fn render_agent_list<T>(
         return;
     }
 
-    // `ui.sidebar.agents.row_padding` pads every agent row the same way `row_gap` spaces
-    // every agent row, except that nested rows drop their top padding (see
+    // `ui.sidebar.agents.row_padding` pads every agent row below its content (see
     // `agent_row_padding`); `render_row` receives the padded rect.
     let row_heights = rows
         .iter()
         .map(|row| {
-            let row = agent_row(row);
-            let (top, bottom) = agent_row_padding(row, config);
-            (row.rows.len().max(1).min(u16::MAX as usize) as u16)
-                .saturating_add(top)
-                .saturating_add(bottom)
+            (agent_row(row).rows.len().max(1).min(u16::MAX as usize) as u16)
+                .saturating_add(agent_row_padding(config))
         })
         .collect::<Vec<_>>();
     let gaps = rows
@@ -321,7 +314,7 @@ fn build_agent_row(
     collapsed: bool,
     hidden_status_counts: super::agent_tree::StatusCounts,
     is_last_child: bool,
-    tree_lines: (u8, u8),
+    tree_lines_below: u8,
     group_key: Option<String>,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
@@ -407,9 +400,7 @@ fn build_agent_row(
         collapsed,
         hidden_status_counts,
         is_last_child,
-        tree_lines_above: tree_lines.0,
-        tree_lines_below: tree_lines.1,
-        tree_line_status_above: Default::default(),
+        tree_lines_below,
         tree_line_status_below: Default::default(),
         group_key,
     })
@@ -461,7 +452,7 @@ pub(super) fn agent_rows(
                     false,
                     Default::default(),
                     false,
-                    (0, 0),
+                    0,
                     None,
                     snapshot,
                     config,
@@ -500,9 +491,6 @@ pub(super) fn agent_rows(
             .and_then(|level| ancestors.get(level))
             .copied();
         ancestors.push(&tree_row.pane_id);
-        let lines_above = index
-            .checked_sub(1)
-            .map_or(0, |previous| lines_below[previous]);
         let group_key = (tree_row.child_count > 0)
             .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
         if let Some(mut row) = build_agent_row(
@@ -512,15 +500,12 @@ pub(super) fn agent_rows(
             tree_row.collapsed,
             tree_row.hidden_status_counts,
             is_last_child,
-            (lines_above, lines_below[index]),
+            lines_below[index],
             group_key,
             snapshot,
             config,
             machine,
         ) {
-            if let Some(previous) = index.checked_sub(1) {
-                row.tree_line_status_above = line_statuses(previous);
-            }
             row.tree_line_status_below = line_statuses(index);
             rows.push(row);
         }
@@ -553,17 +538,18 @@ fn render_agent_drag_marks(
     }
 }
 
-/// Padding rows above and below an agent row. A nested row keeps only its bottom padding: the
-/// row above already ends in padding, so a parent and its children sit one row apart while
-/// separate top-level groups keep the full gap between them.
-pub(super) fn agent_row_padding(row: &AgentRow, config: &ClientShellConfig) -> (u16, u16) {
-    let padding = config.agents.row_padding;
-    (if row.depth > 0 { 0 } else { padding }, padding)
+/// Padding rows below an agent row. The highlight leaves padding unlit, so padding above a
+/// row as well would double the blank space between neighbours; every agent sits
+/// `row_padding` rows below the one before it.
+pub(super) fn agent_row_padding(config: &ClientShellConfig) -> u16 {
+    config.agents.row_padding
 }
 
-/// Highlights the content lines of the focused agent row. The padding rows stay unlit so the
-/// highlight hugs the text, and it runs across the scrollbar and the sidebar separator right
-/// of `body` up to the pane, so the focused agent reads as attached to the terminal it drives.
+/// Highlights the focused agent row. Its content lines are lit in full, and when blank rows
+/// separate it from its neighbours the highlight reaches half a row into the blank row above
+/// and below, so it ends on the border between agents with even room around the text. It runs
+/// across the scrollbar and the sidebar separator right of `body` up to the pane, so the
+/// focused agent reads as attached to the terminal it drives.
 fn highlight_focused_agent_row(
     buffer: &mut Buffer,
     rect: Rect,
@@ -574,21 +560,36 @@ fn highlight_focused_agent_row(
     if !row.focused {
         return;
     }
-    let content = super::sidebar::padded_content_rect(rect, agent_row_padding(row, config));
-    for y in content.y..content.bottom() {
-        if let Some(cell) = buffer.cell_mut((body.right(), y)) {
-            cell.set_symbol(" ");
+    let padding = agent_row_padding(config);
+    let content = super::sidebar::padded_content_rect(rect, (0, padding));
+    let background = config.palette.active_row_bg;
+    super::render::highlight_sidebar_row(buffer, content, body.right(), background);
+    if padding.saturating_add(config.agents.row_gap) == 0 || content.is_empty() {
+        return;
+    }
+    let half = Style::default()
+        .fg(background)
+        .remove_modifier(Modifier::all());
+    // The blank row above is the previous row's padding or gap, or the blank row under the
+    // panel header; its tree lines are already drawn there and keep their cells.
+    if let Some(above) = content.y.checked_sub(1) {
+        for x in body.x..=body.right() {
+            if let Some(cell) = buffer.cell_mut((x, above)) {
+                if matches!(cell.symbol(), " " | "│") {
+                    cell.set_symbol("▄").set_style(half);
+                }
+            }
         }
     }
-    buffer.set_style(
-        Rect::new(
-            body.x,
-            content.y,
-            body.width.saturating_add(1),
-            content.height,
-        ),
-        Style::default().bg(config.palette.active_row_bg),
-    );
+    // The blank row below is this row's own padding (or the gap after it); tree lines drawn
+    // into it afterwards replace the half block in their cells.
+    if content.bottom() < body.bottom() {
+        for x in body.x..=body.right() {
+            if let Some(cell) = buffer.cell_mut((x, content.bottom())) {
+                cell.set_symbol("▀").set_style(half);
+            }
+        }
+    }
 }
 
 /// Renders an agent row into a rect that includes its `agent_row_padding` rows. The padding
@@ -600,17 +601,8 @@ pub(super) fn render_padded_agent_row(
     row: &AgentRow,
     config: &ClientShellConfig,
 ) -> Vec<(Rect, String, String)> {
-    let padding = agent_row_padding(row, config);
-    let top = rect.y..rect.y.saturating_add(padding.0).min(rect.bottom());
-    let bottom = rect.bottom().saturating_sub(padding.1).max(top.end)..rect.bottom();
-    render_tree_lines(
-        buffer,
-        rect,
-        top,
-        row.tree_lines_above,
-        &row.tree_line_status_above,
-        config,
-    );
+    let padding = (0, agent_row_padding(config));
+    let bottom = rect.bottom().saturating_sub(padding.1).max(rect.y)..rect.bottom();
     render_tree_lines(
         buffer,
         rect,

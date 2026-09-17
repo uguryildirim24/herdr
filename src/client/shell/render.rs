@@ -28,6 +28,34 @@ pub(in crate::client::shell) fn render_sidebar_background(
     }
 }
 
+/// Paints a sidebar row highlight over `rect` and on through the scrollbar and separator
+/// columns up to `separator_x`, blanking the separator glyph beside it, so a highlighted row
+/// reads as attached to the panes.
+pub(in crate::client::shell) fn highlight_sidebar_row(
+    buffer: &mut Buffer,
+    rect: Rect,
+    separator_x: u16,
+    background: ratatui::style::Color,
+) {
+    if rect.is_empty() || separator_x < rect.x {
+        return;
+    }
+    for y in rect.y..rect.bottom() {
+        if let Some(cell) = buffer.cell_mut((separator_x, y)) {
+            cell.set_symbol(" ");
+        }
+    }
+    buffer.set_style(
+        Rect::new(
+            rect.x,
+            rect.y,
+            separator_x.saturating_sub(rect.x).saturating_add(1),
+            rect.height,
+        ),
+        Style::default().bg(background),
+    );
+}
+
 pub(super) fn render_mode_bar(
     buffer: &mut Buffer,
     pane_area: Rect,

@@ -117,6 +117,13 @@ fn padded_space_rows_extend_highlight_and_hit_target() {
     assert_eq!(second.y, first.bottom());
     assert!(row_has_bg(&buffer, first, first.y, active));
     assert!(row_has_bg(&buffer, first, first.bottom() - 1, active));
+    // The highlight runs through the sidebar separator up to the panes.
+    let separator = state.hits.sidebar_divider.x;
+    for y in first.y..first.bottom() {
+        assert_eq!(buffer[(separator, y)].bg, active);
+        assert_eq!(buffer[(separator, y)].symbol(), " ");
+    }
+    assert_eq!(buffer[(separator, second.y)].symbol(), "│");
     assert!(row_text(&buffer, first, first.y).trim().is_empty());
     assert!(row_text(&buffer, first, first.y + 1).contains("space-1"));
     assert!(row_text(&buffer, first, first.y + 2).contains("main"));
@@ -228,7 +235,7 @@ fn reveal_scrolls_padded_focused_space_fully_into_view() {
 }
 
 #[test]
-fn padded_nested_agent_rows_extend_the_hit_target_but_not_the_highlight() {
+fn padded_nested_agent_rows_extend_the_hit_target_and_half_the_highlight() {
     let mut config = padded_config(0, 1);
     config.agent_parent_nesting = true;
     let mut projected = snapshot();
@@ -246,31 +253,41 @@ fn padded_nested_agent_rows_extend_the_hit_target_but_not_the_highlight() {
     let (parent, parent_id) = state.hits.agents[0].clone();
     let (child, child_id) = state.hits.agents[1].clone();
     assert_eq!((parent_id.as_str(), child_id.as_str()), ("p1", "p2"));
-    assert_eq!(parent.height, 2 + 2);
-    // A nested row drops its top padding (the parent's bottom padding already separates them),
-    // and a child in its parent's workspace is named by its agent label, so the default second
-    // line holding that label goes away.
+    // Agent rows are padded below only, so neighbours sit one padding apart; a child in its
+    // parent's workspace is named by its agent label, so the default second line holding
+    // that label goes away.
+    assert_eq!(parent.height, 2 + 1);
     assert_eq!(child.height, 1 + 1);
     assert_eq!(child.y, parent.bottom());
-    // The highlight hugs the content lines and leaves the padding rows unlit.
-    assert!(!row_has_bg(&buffer, parent, parent.y, active));
+    // The content lines are lit in full; the blank rows above and below are lit half way,
+    // so the highlight ends on the border between agents.
+    assert!(row_has_bg(&buffer, parent, parent.y, active));
     assert!(row_has_bg(&buffer, parent, parent.y + 1, active));
-    assert!(row_has_bg(&buffer, parent, parent.y + 2, active));
     assert!(!row_has_bg(&buffer, parent, parent.bottom() - 1, active));
-    // It runs through the sidebar separator up to the pane, which the separator glyph
-    // leaves for the unlit rows.
+    let half_row = |y: u16, glyph: &str| {
+        (parent.x..parent.right())
+            .filter(|&x| buffer[(x, y)].symbol() == glyph)
+            .all(|x| buffer[(x, y)].fg == active && buffer[(x, y)].bg != active)
+    };
+    assert!(half_row(parent.y - 1, "▄"));
+    assert!(half_row(parent.bottom() - 1, "▀"));
+    // The tree line to the child keeps its cell in the lower half row.
+    assert_eq!(buffer[(parent.x + 1, parent.bottom() - 1)].symbol(), "┃");
+    assert_eq!(buffer[(parent.x + 2, parent.bottom() - 1)].symbol(), "▀");
+    // It all runs through the sidebar separator up to the pane.
     let separator = state.hits.sidebar_divider.x;
-    assert_eq!(buffer[(separator, parent.y + 1)].bg, active);
-    assert_eq!(buffer[(separator, parent.y + 1)].symbol(), " ");
-    assert_eq!(buffer[(separator, parent.y)].symbol(), "│");
-    assert!(row_text(&buffer, parent, parent.y).trim().is_empty());
-    assert!(row_text(&buffer, parent, parent.y + 2).contains("p1"));
+    assert_eq!(buffer[(separator, parent.y)].bg, active);
+    assert_eq!(buffer[(separator, parent.y)].symbol(), " ");
+    assert_eq!(buffer[(separator, parent.y - 1)].symbol(), "▄");
+    assert_eq!(buffer[(separator, parent.bottom() - 1)].symbol(), "▀");
+    assert_eq!(buffer[(separator, child.y)].symbol(), "│");
+    assert!(row_text(&buffer, parent, parent.y + 1).contains("p1"));
     assert!(row_text(&buffer, child, child.y).contains("┗━━"));
     assert!(!row_has_bg(&buffer, child, child.y, active));
 
     let (toggle, pane_id, _) = &state.hits.agent_group_toggles[0];
     assert_eq!(pane_id, "p1");
-    assert_eq!(toggle.y, parent.y + 1);
+    assert_eq!(toggle.y, parent.y);
 
     let outcome = click(&mut state, child.x + 4, child.bottom() - 1);
     assert!(matches!(
@@ -329,10 +346,15 @@ fn padded_rows_apply_to_the_multi_machine_sidebar() {
         .iter()
         .find(|(_, id, _)| *id == endpoint_id)
         .expect("remote agent hit");
-    assert_eq!(agent_rect.height, 2 + 2);
-    assert!(!row_has_bg(&buffer, *agent_rect, agent_rect.y, active));
-    assert!(row_has_bg(&buffer, *agent_rect, agent_rect.y + 1, active));
-    assert!(row_text(&buffer, *agent_rect, agent_rect.y + 2).contains("remote-agent"));
+    assert_eq!(agent_rect.height, 2 + 1);
+    assert!(row_has_bg(&buffer, *agent_rect, agent_rect.y, active));
+    assert!(!row_has_bg(
+        &buffer,
+        *agent_rect,
+        agent_rect.bottom() - 1,
+        active
+    ));
+    assert!(row_text(&buffer, *agent_rect, agent_rect.y + 1).contains("remote-agent"));
 }
 
 #[test]
@@ -440,13 +462,12 @@ fn padded_nested_agent_rows_keep_tree_lines_continuous() {
     let col = |y| tree_columns(&buffer, x, y);
     let s = |glyphs: [&str; 3]| glyphs.map(str::to_string);
 
-    // p1: no line above a top-level row; its line to c1 starts under its icon on its second
-    // content row and runs through its bottom padding.
-    assert_eq!(col(p1.y), s([" ", " ", " "]));
-    assert_eq!(col(p1.y + 2)[0], "┃");
+    // p1: its line to c1 starts under its icon on its second content row and runs through
+    // its bottom padding.
+    assert_eq!(col(p1.y + 1)[0], "┃");
     assert_eq!(col(p1.bottom() - 1), s(["┃", " ", " "]));
-    // c1: no top padding; the content row branches, and its bottom padding carries its sibling
-    // line (c2 follows) and its own line down to g1.
+    // c1: the content row branches, and its bottom padding carries its sibling line (c2
+    // follows) and its own line down to g1.
     assert_eq!(c1.y, p1.bottom());
     assert_eq!(col(c1.y)[0], "┣");
     assert_eq!(col(c1.bottom() - 1), s(["┃", "┃", " "]));
@@ -456,7 +477,7 @@ fn padded_nested_agent_rows_keep_tree_lines_continuous() {
     // c2: last child, so nothing continues below its branch.
     assert_eq!(col(c2.y)[0], "┗");
     assert_eq!(col(c2.bottom() - 1), s([" ", " ", " "]));
-    assert_eq!(col(p2.y), s([" ", " ", " "]));
+    assert_eq!(p2.y, c2.bottom());
 
     // Every agent here is working, so every connector is the dimmed working color.
     let working = state.config.palette.yellow;
