@@ -56,9 +56,9 @@ pub(crate) fn render_collapsed_sidebar(
                 palette.selection_bg
             };
         if selected {
-            buffer.set_style(rect, Style::default().bg(selection_background));
+            highlight_sidebar_row(buffer, rect, workspace_area.right(), selection_background);
         } else if workspace.focused {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+            highlight_sidebar_row(buffer, rect, workspace_area.right(), palette.active_row_bg);
         }
         let number_style = if selected {
             Style::default()
@@ -138,16 +138,8 @@ pub(crate) fn render_collapsed_sidebar(
                     continue;
                 };
                 agent_index += 1;
-                if agent.focused && !rect.is_empty() {
-                    // Like the expanded panel, the highlight runs through the sidebar
-                    // separator up to the pane.
-                    if let Some(cell) = buffer.cell_mut((rect.right(), rect.y)) {
-                        cell.set_symbol(" ");
-                    }
-                    buffer.set_style(
-                        Rect::new(rect.x, rect.y, rect.width.saturating_add(1), 1),
-                        Style::default().bg(palette.active_row_bg),
-                    );
+                if agent.focused {
+                    highlight_sidebar_row(buffer, rect, rect.right(), palette.active_row_bg);
                 }
                 let number_style = Style::default().fg(if agent.focused {
                     palette.text
@@ -469,12 +461,17 @@ pub(crate) fn render_sidebar(
             target.matches(state.active_endpoint_id, &workspace.workspace_id)
         });
         let dragged = state.dragged_workspace_id == Some(workspace.workspace_id.as_str());
-        if selected {
-            buffer.set_style(rect, Style::default().bg(palette.selection_bg));
+        let highlight = if selected {
+            Some(palette.selection_bg)
         } else if dragged {
-            buffer.set_style(rect, Style::default().bg(palette.surface1));
+            Some(palette.surface1)
         } else if workspace.focused {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+            Some(palette.active_row_bg)
+        } else {
+            None
+        };
+        if let Some(background) = highlight {
+            highlight_sidebar_row(buffer, rect, body.right(), background);
         }
         render_workspace_rows(
             buffer,

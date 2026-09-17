@@ -112,9 +112,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
     };
@@ -130,9 +128,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: None,
     };
@@ -148,9 +144,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child: true,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: None,
     };
@@ -213,9 +207,7 @@ fn collapsed_parent_shows_a_dot_stack_of_hidden_statuses() {
         collapsed: true,
         hidden_status_counts: [0, 1, 0, 2, 1],
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
     };
@@ -279,9 +271,7 @@ fn collapsed_parent_dot_stack_is_capped_at_five() {
         collapsed: true,
         hidden_status_counts: [0, 9, 0, 0, 0],
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
     };
@@ -309,9 +299,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: None,
     };
@@ -327,9 +315,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child: false,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: None,
     };
@@ -562,9 +548,7 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
         collapsed: false,
         hidden_status_counts: Default::default(),
         is_last_child,
-        tree_lines_above: 0,
         tree_lines_below: 0,
-        tree_line_status_above: Default::default(),
         tree_line_status_below: Default::default(),
         group_key: None,
     };
@@ -1049,6 +1033,37 @@ fn compact_sidebar_collapse_marker_toggles_the_shared_group_state() {
             )
     ));
     assert!(!state.collapsed_groups.contains("agent:p1"));
+}
+
+#[test]
+fn focused_agent_highlight_has_no_half_rows_when_agents_touch() {
+    let mut snapshot = snapshot();
+    snapshot.agents = vec![
+        tree_agent("p1", AgentStatus::Idle, 1, None),
+        tree_agent("p2", AgentStatus::Idle, 2, None),
+        tree_agent("p3", AgentStatus::Idle, 3, None),
+    ];
+    snapshot.agents[1].focused = true;
+    let config = ClientShellConfig::from_config(&Config::default());
+    let area = Rect::new(0, 0, 30, 12);
+    let mut buffer = Buffer::empty(area);
+    let mut hits = ShellHitMap::default();
+    render_agent_panel(
+        &mut buffer,
+        area,
+        &snapshot,
+        &config,
+        &HashSet::new(),
+        &mut 0,
+        None,
+        &mut hits,
+    );
+
+    let text: String = (0..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+        .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+        .collect();
+    assert!(!text.contains('▀') && !text.contains('▄'));
 }
 
 #[test]
