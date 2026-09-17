@@ -68,10 +68,13 @@ pub enum Agent {
     /// A ChatGPT web chat drawn as pane graphics, for example by a terminal
     /// browser. Its state is read from the frames' composer button.
     Chatgpt,
+    /// DeepSeek Harness TUI (`dst` / `dsh-tui`), which runs as `node dsh
+    /// --profile dsh-tui` under its node launchers.
+    Dsh,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -97,9 +100,10 @@ impl Agent {
         Self::Maki,
         Self::Muse,
         Self::Chatgpt,
+        Self::Dsh,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -123,6 +127,7 @@ impl Agent {
         Self::Maki,
         Self::Muse,
         Self::Chatgpt,
+        Self::Dsh,
     ];
 }
 
@@ -153,6 +158,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Maki => "maki",
         Agent::Muse => "muse",
         Agent::Chatgpt => "chatgpt",
+        Agent::Dsh => "dsh",
     }
 }
 
@@ -191,6 +197,7 @@ pub fn interactive_agent_executable(agent: Agent) -> Option<&'static str> {
         Agent::Maki => "maki",
         Agent::Muse => "muse",
         Agent::Chatgpt => return None,
+        Agent::Dsh => "dst",
     };
     Some(executable)
 }
@@ -233,6 +240,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         "chatgpt" => Some(Agent::Chatgpt),
+        "dsh" | "dsh-tui" | "dst" => Some(Agent::Dsh),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -959,6 +967,14 @@ mod tests {
         assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
         assert_eq!(identify_agent("chatgpt"), None);
         assert_eq!(parse_agent_label("chatgpt"), Some(Agent::Chatgpt));
+        assert_eq!(identify_agent("dsh"), Some(Agent::Dsh));
+        assert_eq!(identify_agent("dsh-tui"), Some(Agent::Dsh));
+        assert_eq!(identify_agent("dst"), Some(Agent::Dsh));
+        assert_eq!(identify_agent("dsh-tui.js"), Some(Agent::Dsh));
+        assert_eq!(
+            identify_agent(r"C:\Users\user\AppData\Roaming\npm\dst.cmd"),
+            Some(Agent::Dsh)
+        );
         assert_eq!(identify_agent("muse-bin-0.1.0-R708.1"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-bin-1.2.3"), Some(Agent::Muse));
         assert_eq!(
@@ -997,6 +1013,9 @@ mod tests {
         assert_eq!(parse_agent_label("letta-code"), Some(Agent::Letta));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(parse_agent_label("dsh"), Some(Agent::Dsh));
+        assert_eq!(parse_agent_label("dsh-tui"), Some(Agent::Dsh));
+        assert_eq!(parse_agent_label("DST"), Some(Agent::Dsh));
     }
 
     #[test]
@@ -1042,6 +1061,7 @@ mod tests {
             (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
+            (Agent::Dsh, "dst"),
         ];
         assert_eq!(expected.len() + 1, Agent::ALL.len());
         for (agent, executable) in expected {
@@ -1094,6 +1114,9 @@ mod tests {
         assert_eq!(identify_agent("muse-bin"), None);
         assert_eq!(identify_agent("muse-bin-"), None);
         assert_eq!(identify_agent("muse-binary"), None);
+        assert_eq!(identify_agent("dshell"), None);
+        assert_eq!(identify_agent("dst-tool"), None);
+        assert_eq!(identify_agent("dsh-web"), None);
     }
 
     #[test]
@@ -1387,6 +1410,68 @@ Enter to select · Esc to cancel"#;
             ),
             AgentState::Idle
         );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_dsh_tui_launcher_chain() {
+        // `dst` from a global npm install delegates to the dsh-tui profile copy,
+        // which spawns `dsh --profile dsh-tui`; all three share the foreground
+        // process group led by the launcher (captured from dsh-tui 0.10.1).
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 69377,
+            processes: vec![
+                foreground_process(
+                    69377,
+                    "node",
+                    &["node", "/Users/user/.local/state/fnm_multishells/1_2/bin/dst"],
+                ),
+                foreground_process(
+                    69378,
+                    "node",
+                    &[
+                        "/Users/user/.local/share/fnm/node-versions/v24.19.0/installation/bin/node",
+                        "/Users/user/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js",
+                    ],
+                ),
+                foreground_process(
+                    69392,
+                    "node",
+                    &["node", "/Users/user/.local/bin/dsh", "--profile", "dsh-tui"],
+                ),
+            ],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Dsh, "dsh".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_each_dsh_process_on_its_own() {
+        for argv in [
+            vec!["node", "/home/user/.npm-global/bin/dsh-tui"],
+            vec![
+                "node",
+                "/home/user/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js",
+            ],
+            vec!["node", "/home/user/.local/bin/dsh", "--profile", "dsh-tui"],
+            vec![
+                "node.exe",
+                r"C:\Users\user\AppData\Roaming\npm\node_modules\@deepseek-harness-tui\dsh-tui\bin\dsh-tui.js",
+            ],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "node", &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Dsh, "dsh".to_string())),
+                "argv: {argv:?}"
+            );
+        }
     }
 
     #[test]

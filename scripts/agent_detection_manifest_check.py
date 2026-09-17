@@ -65,12 +65,17 @@ STAGED_PUBLISHED_MANIFESTS = {
 }
 
 # Released clients cannot identify `chatgpt` panes, which only exist behind
-# experimental.pane_graphics_detection. Publish the bundled manifest and remove
-# this entry before the first stable release that ships the agent.
+# experimental.pane_graphics_detection, or `dsh` panes, whose agent kind is new.
+# Publish each bundled manifest and remove its entry before the first stable
+# release that ships the agent.
 UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {
     "chatgpt": (
         "2026.09.16.1",
         "c2d6110e3efbc7051777320446f42182f8d1c49a7ce9afe7730b823f56a05a3e",
+    ),
+    "dsh": (
+        "2026.09.16.1",
+        "440e179bb3912c5b98db3c38d331c04bb0e7fab81cd0c62e55b60e3e7fdf9237",
     ),
 }
 

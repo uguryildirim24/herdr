@@ -1446,6 +1446,17 @@
             "on",
             "off"
           ]
+        },
+        {
+          "key": "ui.sound.agents.dsh",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected DeepSeek Harness TUI agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
         }
       ]
     },

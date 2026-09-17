@@ -1,0 +1,71 @@
+id = "dsh"
+version = "2026.09.16.1"
+min_engine_version = 2
+updated_at = "2026-09-16T00:00:00Z"
+aliases = ["dsh-tui", "dst"]
+
+# Evidence: live bottom-buffer captures from dsh-tui 0.10.1 (`dst`, running
+# `dsh --profile dsh-tui` on @deepseek-ai/dsh 0.1.5-rc.1) in Herdr, in both UI
+# languages (`DSH_TUI_LANG=zh` / `en`).
+#
+# dsh-tui is fullscreen. The composer is a rounded box whose input row ends in
+# a `⛶` expand button; the footer below it holds the model row, a context-bar
+# row after the first turn, and a one-line hint row at the very bottom.
+#
+# Working: the hint row reads `esc to interrupt` / `esc 中断` for the whole
+# turn, including while an approval is pending. Hovering a footer field swaps
+# the hint for a readout, so the terminal title is a second source: dsh-tui
+# titles itself `<prefix> 🐋 <session title>`, where the prefix is a braille
+# spinner frame (`⠂` / `⠐`) while working and `✦` otherwise. The moon spinner
+# row above the composer depends on configurable frames and is not used.
+#
+# Blocked: a sandbox escalation replaces the composer with an approval panel:
+#   ─── Awaiting approval · bash ───      ─── ⏳ 等待审批 · bash ───
+#   Allow this operation?                 要允许这次操作吗？
+#   ❯1. Yes, allow once                   ❯1. 允许（仅本次）
+#    2. No                                 2. 拒绝
+#   ↑/↓ select · Enter confirm · Esc reject    ↑/↓ 选择 · Enter 确认 · Esc 拒绝
+# The question, the allow-once option and the key hint must co-occur at the
+# bottom with no composer on screen. The `ask_user_question` panel was not
+# captured and has no rule; dsh-tui's own Herdr reporter covers it.
+
+[[rules]]
+id = "approval_panel_blocked"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(10)"
+visible_blocker = true
+any = [
+  { contains = ["Allow this operation?", "Yes, allow once", "Enter confirm · Esc reject"] },
+  { contains = ["要允许这次操作吗？", "允许（仅本次）", "Enter 确认 · Esc 拒绝"] },
+]
+not = [
+  { contains = ["⛶"] },
+]
+
+[[rules]]
+id = "title_spinner_working"
+state = "working"
+priority = 700
+region = "osc_title"
+visible_working = true
+regex = ['^[\x{2800}-\x{28FF}] 🐋']
+
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 600
+region = "bottom_non_empty_lines(1)"
+visible_working = true
+any = [
+  { line_regex = ['^\s*esc to interrupt(\s|$)'] },
+  { line_regex = ['^\s*esc 中断(\s|$)'] },
+]
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(12)"
+visible_idle = true
+line_regex = ['⛶\s*$', '^\s*╰─+╯\s*$']

@@ -4080,6 +4080,29 @@ mod tests {
     }
 
     #[test]
+    fn detected_dsh_clear_clears_dsh_tui_reporter_authority() {
+        // dsh-tui reports as `custom:dsh-tui` with agent `dsh-tui`, which the
+        // API normalizes to `dsh`, so the report ends with the dsh process.
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Dsh), AgentState::Idle);
+        terminal.set_hook_authority(
+            "custom:dsh-tui".into(),
+            "dsh".into(),
+            AgentState::Blocked,
+            Some("Waiting for user input".into()),
+            Some(1),
+        );
+        assert_eq!(terminal.state, AgentState::Blocked);
+        assert_eq!(terminal.effective_known_agent(), Some(Agent::Dsh));
+
+        terminal.set_detected_state(None, AgentState::Unknown);
+
+        assert!(terminal.hook_authority.is_none());
+        assert_eq!(terminal.effective_agent_label(), None);
+        assert_eq!(terminal.state, AgentState::Unknown);
+    }
+
+    #[test]
     fn process_exit_clears_matching_hook_authority_before_reporting_idle() {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);

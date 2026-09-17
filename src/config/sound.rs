@@ -48,6 +48,7 @@ pub struct AgentSoundOverrides {
     pub maki: AgentSoundSetting,
     pub muse: AgentSoundSetting,
     pub chatgpt: AgentSoundSetting,
+    pub dsh: AgentSoundSetting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -148,6 +149,7 @@ impl AgentSoundOverrides {
             Some(Agent::Maki) => self.maki,
             Some(Agent::Muse) => self.muse,
             Some(Agent::Chatgpt) => self.chatgpt,
+            Some(Agent::Dsh) => self.dsh,
             None => AgentSoundSetting::Default,
         }
     }
@@ -191,6 +193,7 @@ impl Default for AgentSoundOverrides {
             maki: AgentSoundSetting::Default,
             muse: AgentSoundSetting::Default,
             chatgpt: AgentSoundSetting::Default,
+            dsh: AgentSoundSetting::Default,
         }
     }
 }
@@ -214,6 +217,7 @@ request_path = "/tmp/request.mp3"
 [ui.sound.agents]
 droid = "off"
 claude = "on"
+dsh = "off"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sound.enabled);
@@ -230,6 +234,11 @@ claude = "on"
         assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::On);
         assert_eq!(config.ui.sound.agents.pi, AgentSoundSetting::Default);
         assert_eq!(config.ui.sound.agents.letta, AgentSoundSetting::Default);
+        assert_eq!(config.ui.sound.agents.dsh, AgentSoundSetting::Off);
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::Dsh)),
+            AgentSoundSetting::Off
+        );
     }
 
     #[test]
