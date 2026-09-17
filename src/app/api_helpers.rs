@@ -279,6 +279,27 @@ pub(super) fn normalize_metadata_tokens(
 }
 
 #[cfg(test)]
+mod reported_agent_label_tests {
+    use super::normalize_reported_agent_label;
+
+    #[test]
+    fn known_aliases_report_their_canonical_label() {
+        // dsh-tui's built-in reporter sends `--agent dsh-tui`.
+        for alias in ["dsh", "dsh-tui", " dst "] {
+            assert_eq!(
+                normalize_reported_agent_label(alias).as_deref(),
+                Some("dsh")
+            );
+        }
+        assert_eq!(
+            normalize_reported_agent_label("my-agent").as_deref(),
+            Some("my-agent")
+        );
+        assert_eq!(normalize_reported_agent_label("  "), None);
+    }
+}
+
+#[cfg(test)]
 mod metadata_token_tests {
     use super::*;
 

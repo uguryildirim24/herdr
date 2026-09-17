@@ -34,6 +34,7 @@ Herdr 为同时运行多个编程智能体而生。每个智能体都待在一�
 | Kiro CLI | 屏幕清单 | 无 |
 | Maki | 屏幕清单 | 无 |
 | Muse | 屏幕清单 | 无 |
+| DeepSeek Harness TUI (dsh-tui) | dsh-tui 自身的上报,配合屏幕清单 | 无 |
 | ChatGPT (图形绘制的网页聊天,实验性) | 窗格图形 | 无 |
 
 可检测但测试较少: Gemini CLI 和 Cline。不受支持的智能体仍然可以作为普通终端进程正常运行,只是在你添加集成或通过 socket API 上报状态之前,可能得不到丰富的状态。
@@ -63,6 +64,14 @@ Herdr 首先检测每个窗格的前台进程。之后,每个窗格有且只有�
 Herdr 只读取图像覆盖整个窗格的新帧,在后台线程中执行,每个窗格每秒最多两次;按钮像素未变化时跳过分类。`chatgpt` 不能通过 `herdr agent start` 启动。
 
 要收集按钮误读的证据,请以 `HERDR_DEBUG_PAGE_BUTTON_DIR=<dir>` 启动服务器。每当读取结果变化时,Herdr 会在该目录中写入按钮的裁剪图,并向 `classifications.log` 追加一行。
+
+## DeepSeek Harness TUI
+
+Herdr 通过 `dst` 和 `dsh-tui` 启动器以及它们启动的 `dsh --profile dsh-tui` 引擎进程识别 DeepSeek Harness TUI,并把该窗格显示为 `dsh` 智能体。`herdr agent start --kind dsh` 会运行 `dst`。
+
+dsh-tui 在 Herdr 窗格中运行时会自行上报状态(已在 dsh-tui 0.10.1 上验证)。它以来源 `custom:dsh-tui`、智能体 `dsh-tui` 调用 `herdr pane report-agent`,Herdr 将其记录为 `dsh`。上报覆盖轮次、审批请求和提问,并在 dsh 进程退出时结束。不需要 `herdr integration install` 步骤。屏幕清单在两种界面语言下读取窗格:`esc 中断`(`esc to interrupt`)提示行或终端标题开头的旋转符号表示 `working`,沙箱审批面板(`要允许这次操作吗？` / `Allow this operation?`)表示 `blocked`,即使上一次上报并非如此。
+
+当命令需要超出沙箱允许的访问时,dsh-tui 会请求审批。要让窗格在没有这些提示的情况下运行,请以 dsh-tui 的完全访问模式启动,例如在 `herdr agent start --kind dsh` 之前使用 `herdr tab create --env DSH_PERMISSION_MODE=danger-full-access`。
 
 ## blocked 状态
 

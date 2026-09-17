@@ -34,6 +34,7 @@ Automatic detection works out of the box for common coding agents. The table sho
 | Kiro CLI | screen manifest | none |
 | Maki | screen manifest | none |
 | Muse | screen manifest | none |
+| DeepSeek Harness TUI (dsh-tui) | dsh-tui's own reports, with screen manifest | none |
 | ChatGPT (graphics-drawn web chat, experimental) | pane graphics | none |
 
 Detected but less thoroughly tested: Gemini CLI and Cline. Unsupported agents still run normally as terminal processes. They just may not get rich state unless you add an integration or report state over the socket API.
@@ -63,6 +64,14 @@ A ChatGPT web chat that a terminal browser draws into a pane as file-backed pane
 Herdr reads only new frames whose image covers the pane, on a background thread and at most twice per second per pane, and it skips classifying a button whose pixels did not change. `chatgpt` cannot be started with `herdr agent start`.
 
 To collect evidence for a misread button, start the server with `HERDR_DEBUG_PAGE_BUTTON_DIR=<dir>`. Herdr then writes a crop of the button and a line to `classifications.log` in that directory each time the reading changes.
+
+## DeepSeek Harness TUI
+
+Herdr identifies DeepSeek Harness TUI by its `dst` and `dsh-tui` launchers and by the `dsh --profile dsh-tui` engine process they start, and shows the pane as a `dsh` agent. `herdr agent start --kind dsh` runs `dst`.
+
+dsh-tui reports its own state when it runs in a Herdr pane (tested with dsh-tui 0.10.1). It calls `herdr pane report-agent` with source `custom:dsh-tui` and agent `dsh-tui`, which Herdr records as `dsh`. The reports cover turns, approval requests, and questions, and they end when the dsh process exits. There is no `herdr integration install` step. The screen manifest reads the pane in both UI languages: the `esc to interrupt` (`esc 中断`) hint row or a spinner at the start of the terminal title means `working`, and the sandbox approval panel (`Allow this operation?` / `要允许这次操作吗？`) means `blocked` even when the last report was not.
+
+dsh-tui asks for approval when a command needs more access than its sandbox allows. To run a pane without those prompts, start it in dsh-tui's full-access mode, for example `herdr tab create --env DSH_PERMISSION_MODE=danger-full-access` before `herdr agent start --kind dsh`.
 
 ## Blocked state
 

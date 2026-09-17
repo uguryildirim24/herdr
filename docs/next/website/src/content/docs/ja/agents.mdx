@@ -34,6 +34,7 @@ Herdr は複数のコーディングエージェントを同時に動かすた�
 | Kiro CLI | スクリーンマニフェスト | なし |
 | Maki | スクリーンマニフェスト | なし |
 | Muse | スクリーンマニフェスト | なし |
+| DeepSeek Harness TUI (dsh-tui) | dsh-tui 自身の報告とスクリーンマニフェスト | なし |
 | ChatGPT (グラフィックス描画の Web チャット、実験的) | ペイングラフィックス | なし |
 
 検出されるもののテストが薄いもの: Gemini CLI と Cline。未対応のエージェントも通常のターミナルプロセスとして問題なく動きます。ただし、インテグレーションを追加するかソケット API で状態を報告しない限り、詳細な状態は得られない可能性があります。
@@ -63,6 +64,14 @@ Linux と macOS では、ホストから見えるラッパーが実際のエー�
 Herdr は、画像がペインを覆う新しいフレームだけを、バックグラウンドスレッドでペインごとに毎秒最大 2 回読み取り、ボタンのピクセルが変わっていなければ分類を省略します。`chatgpt` は `herdr agent start` では起動できません。
 
 ボタンの誤読の証拠を集めるには、サーバーを `HERDR_DEBUG_PAGE_BUTTON_DIR=<dir>` 付きで起動します。読み取り結果が変わるたびに、Herdr はそのディレクトリにボタンの切り抜き画像を書き出し、`classifications.log` に 1 行追記します。
+
+## DeepSeek Harness TUI
+
+Herdr は DeepSeek Harness TUI を、`dst` と `dsh-tui` のランチャー、およびそれらが起動する `dsh --profile dsh-tui` エンジンプロセスから識別し、そのペインを `dsh` エージェントとして表示します。`herdr agent start --kind dsh` は `dst` を実行します。
+
+dsh-tui は Herdr のペインで動くと自身の状態を報告します (dsh-tui 0.10.1 で確認)。ソース `custom:dsh-tui`、エージェント `dsh-tui` で `herdr pane report-agent` を呼び出し、Herdr はこれを `dsh` として記録します。報告はターン、承認リクエスト、質問をカバーし、dsh プロセスの終了とともに終わります。`herdr integration install` の手順はありません。スクリーンマニフェストは両方の UI 言語でペインを読み取ります。`esc to interrupt` (`esc 中断`) のヒント行、またはターミナルタイトル先頭のスピナーは `working` を、サンドボックスの承認パネル (`Allow this operation?` / `要允许这次操作吗？`) は直前の報告に関係なく `blocked` を意味します。
+
+dsh-tui は、コマンドがサンドボックスの許可を超えるアクセスを必要とするときに承認を求めます。これらのプロンプトなしでペインを動かすには、dsh-tui のフルアクセスモードで起動します。たとえば `herdr agent start --kind dsh` の前に `herdr tab create --env DSH_PERMISSION_MODE=danger-full-access` を使います。
 
 ## blocked 状態
 

@@ -385,6 +385,103 @@ fn chatgpt_manifest_maps_graphics_button_lines() {
 }
 
 #[test]
+fn dsh_manifest_reads_composer_hint_row_title_and_approval_panel() {
+    // Bottom rows of dsh-tui 0.10.1 captures in an 82-column pane.
+    const COMPOSER: &str = concat!(
+        "  ╭────────────────────────────────╮\n",
+        "  ❯                                ⛶\n",
+        "  ╰────────────────────────────────╯\n",
+    );
+    const FOOTER: &str = concat!(
+        "   spatx            free    ctx 9.5k/1.0M 1.0% 990k\n",
+        "   deepseek-v4-1-flash · max · cache 0.0% · scratch\n",
+    );
+    let idle_title = "✦ 🐋 List directory contents via shell";
+    let working_title = "⠐ 🐋 List directory contents via shell";
+
+    let idle = osc_explain(
+        Agent::Dsh,
+        &format!("  ⏺ ls ran successfully.\n{COMPOSER}{FOOTER}"),
+        idle_title,
+        "",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+    assert_eq!(
+        idle.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("composer_idle")
+    );
+
+    for (spinner, hint) in [
+        (
+            "🌗 Connecting… · total 0s · ↑ 9.3k · ↓ 10 tokens",
+            "esc to interrupt",
+        ),
+        ("🌕 它在组织语言 · 总0s · ↓ 0 tokens", "esc 中断"),
+    ] {
+        let screen = format!("  {spinner}\n{COMPOSER}{FOOTER}   {hint}\n");
+        let by_title = osc_explain(Agent::Dsh, &screen, working_title, "");
+        assert_eq!(by_title.state, AgentState::Working);
+        assert_eq!(
+            by_title.matched_rule.map(|rule| rule.id).as_deref(),
+            Some("title_spinner_working")
+        );
+        let by_hint = osc_explain(Agent::Dsh, &screen, idle_title, "");
+        assert_eq!(by_hint.state, AgentState::Working, "{hint}");
+        assert!(by_hint.visible_working);
+        assert_eq!(
+            by_hint.matched_rule.map(|rule| rule.id).as_deref(),
+            Some("interrupt_hint_working")
+        );
+    }
+
+    for (header, body, hint) in [
+        (
+            "    ──────── Awaiting approval · bash ────────\n",
+            "    Allow this operation?\n    ❯1. Yes, allow once\n     2. No\n",
+            "    ↑/↓ select · Enter confirm · Esc reject\n",
+        ),
+        (
+            "    ──────── ⏳ 等待审批 · bash ────────\n",
+            "    要允许这次操作吗？\n    ❯1. 允许（仅本次）\n     2. 拒绝\n",
+            "    ↑/↓ 选择 · Enter 确认 · Esc 拒绝\n",
+        ),
+    ] {
+        let screen = format!(
+            "  🌓 Running touch probe · 0s · tool x2 · ↓ 70 tokens\n{header}      touch /var/tmp/probe\n    escalate sandbox to danger-full-access: outside the workspace.\n{body}{hint}{FOOTER}   esc to interrupt\n"
+        );
+        let blocked = osc_explain(Agent::Dsh, &screen, working_title, "");
+        assert_eq!(blocked.state, AgentState::Blocked, "{header}");
+        assert!(blocked.visible_blocker);
+        assert_eq!(
+            blocked.matched_rule.map(|rule| rule.id).as_deref(),
+            Some("approval_panel_blocked")
+        );
+    }
+
+    // The same words in the transcript above a live composer are not a panel.
+    let quoted = osc_explain(
+        Agent::Dsh,
+        &format!(
+            "  ⏺ The panel asks: Allow this operation? Yes, allow once, and\n    shows ↑/↓ select · Enter confirm · Esc reject.\n{COMPOSER}{FOOTER}"
+        ),
+        idle_title,
+        "",
+    );
+    assert_eq!(quoted.state, AgentState::Idle);
+    assert!(!quoted.visible_blocker);
+
+    // Mid-transcript interrupt text is not the bottom hint row.
+    let mentioned = osc_explain(
+        Agent::Dsh,
+        &format!("  ⏺ press esc to interrupt a turn\n{COMPOSER}{FOOTER}"),
+        idle_title,
+        "",
+    );
+    assert_eq!(mentioned.state, AgentState::Idle);
+}
+
+#[test]
 fn muse_manifest_requires_complete_live_controls() {
     let working = explain(
         Agent::Muse,
