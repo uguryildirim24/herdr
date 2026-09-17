@@ -119,6 +119,9 @@ fn shell_quote(value: &str) -> String {
 /// Unsupported platform stub.
 pub fn raise_server_nofile_limit() {}
 
+/// Unsupported platform stub.
+pub(crate) fn lower_current_thread_priority() {}
+
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     false
 }

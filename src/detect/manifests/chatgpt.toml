@@ -1,0 +1,32 @@
+id = "chatgpt"
+version = "2026.09.16.1"
+min_engine_version = 3
+updated_at = "2026-09-16T00:00:00Z"
+
+# A ChatGPT web chat drawn as pane graphics has no terminal text. With
+# experimental.pane_graphics_detection on, Herdr reads the composer's round
+# action button from the frame pixels and replaces the pane's detection
+# screen with one synthetic line naming the button glyph. Until a glyph has
+# been read the screen is the pane's terminal text, which matches no rule, so
+# the known-agent idle fallback applies.
+
+[[rules]]
+id = "composer_stop_button"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(1)"
+contains = ["[herdr pane graphics] composer button: stop"]
+
+[[rules]]
+id = "composer_voice_button"
+state = "idle"
+priority = 90
+region = "bottom_non_empty_lines(1)"
+contains = ["[herdr pane graphics] composer button: voice"]
+
+[[rules]]
+id = "composer_send_button"
+state = "idle"
+priority = 90
+region = "bottom_non_empty_lines(1)"
+contains = ["[herdr pane graphics] composer button: send"]

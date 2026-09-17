@@ -360,6 +360,17 @@ impl TerminalRuntime {
         self.0.detection_text()
     }
 
+    pub(crate) fn submit_graphics_detection_frame(
+        &self,
+        frame: impl crate::graphics_detection::FrameSource,
+        frame_size: (u32, u32),
+        bgra: bool,
+        placement: &crate::api::schema::PaneGraphicsPlacementParams,
+    ) {
+        self.0
+            .submit_graphics_detection_frame(frame, frame_size, bgra, placement);
+    }
+
     pub fn terminal_title(&self) -> Option<String> {
         self.0.terminal_title()
     }

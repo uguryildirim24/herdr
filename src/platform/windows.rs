@@ -877,6 +877,9 @@ impl ProcessSnapshot {
 
 pub fn raise_server_nofile_limit() {}
 
+/// Background detection threads keep the default priority on Windows.
+pub(crate) fn lower_current_thread_priority() {}
+
 pub(crate) fn apply_pane_runtime_marker_platform(command: &mut portable_pty::CommandBuilder) {
     if command_uses_git_bash(command) {
         command.env(PANE_RUNTIME_MARKER_ENV_VAR, next_pane_runtime_marker());

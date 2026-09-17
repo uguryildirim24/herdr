@@ -712,6 +712,7 @@ fn spawn_basic_detection_task(
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
     detection_content_seq: Arc<AtomicU64>,
+    graphics_detection: Arc<crate::graphics_detection::GraphicsDetection>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     state_events: mpsc::Sender<AppEvent>,
 ) -> (
@@ -886,6 +887,7 @@ fn spawn_basic_detection_task(
                 }
             }
 
+            graphics_detection.observe_agent(agent);
             let process_exited = pending_foreground_shell_clear
                 && agent.is_some()
                 && !foreground_shell_exit_reported;
@@ -929,7 +931,9 @@ fn spawn_basic_detection_task(
                 DetectionScreenReadDecision::Skip => continue,
             }
 
-            let content = terminal.detection_text();
+            let content = graphics_detection
+                .detection_text()
+                .unwrap_or_else(|| terminal.detection_text());
             last_screen_scan_detection_content_seq = current_detection_content_seq;
             let content_changed = content != last_detection_text;
             last_detection_text.clone_from(&content);
@@ -1260,6 +1264,7 @@ pub struct PaneRuntime {
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
     detection_content_seq: Arc<AtomicU64>,
+    graphics_detection: Arc<crate::graphics_detection::GraphicsDetection>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
@@ -2181,6 +2186,8 @@ impl PaneRuntime {
         let content_seq = Arc::new(AtomicU64::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let graphics_detection =
+            crate::graphics_detection::GraphicsDetection::new(detection_content_seq.clone());
 
         let io = {
             let terminal = terminal.clone();
@@ -2267,6 +2274,7 @@ impl PaneRuntime {
             child_pid.clone(),
             terminal.clone(),
             detection_content_seq.clone(),
+            graphics_detection.clone(),
             full_lifecycle_authority_active.clone(),
             events,
         );
@@ -2283,6 +2291,7 @@ impl PaneRuntime {
             content_seq,
             content_write_lock,
             detection_content_seq,
+            graphics_detection,
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -2342,6 +2351,8 @@ impl PaneRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let graphics_detection =
+            crate::graphics_detection::GraphicsDetection::new(detection_content_seq.clone());
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         {
             let child_pid = child_pid.clone();
@@ -2465,6 +2476,7 @@ impl PaneRuntime {
             let terminal = terminal.clone();
             let state_events = events.clone();
             let detection_content_seq = detection_content_seq.clone();
+            let graphics_detection = graphics_detection.clone();
             let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
             let render_notify = render_notify.clone();
             let render_dirty = render_dirty.clone();
@@ -2719,6 +2731,7 @@ impl PaneRuntime {
                         }
                     }
 
+                    graphics_detection.observe_agent(agent);
                     let process_exited = pending_foreground_shell_clear
                         && agent.is_some()
                         && !foreground_shell_exit_reported;
@@ -2762,7 +2775,9 @@ impl PaneRuntime {
                         DetectionScreenReadDecision::Skip => continue,
                     }
 
-                    let content = terminal.detection_text();
+                    let content = graphics_detection
+                        .detection_text()
+                        .unwrap_or_else(|| terminal.detection_text());
                     last_screen_scan_detection_content_seq = current_detection_content_seq;
                     let content_changed = content != last_detection_text;
                     last_detection_text.clone_from(&content);
@@ -2859,6 +2874,7 @@ impl PaneRuntime {
             content_seq,
             content_write_lock,
             detection_content_seq,
+            graphics_detection,
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -3076,8 +3092,49 @@ impl PaneRuntime {
         self.terminal.visible_ansi()
     }
 
+    /// Bottom-buffer text for agent detection. Panes whose agent is drawn as
+    /// pane graphics use the line read from their frames instead, once one was
+    /// read.
     pub fn detection_text(&self) -> String {
-        self.terminal.detection_text()
+        self.graphics_detection
+            .detection_text()
+            .unwrap_or_else(|| self.terminal.detection_text())
+    }
+
+    /// Offers a pane graphics frame to graphics detection. Cheap when the pane
+    /// does not want frames; never blocks on the check.
+    pub(crate) fn submit_graphics_detection_frame(
+        &self,
+        frame: impl crate::graphics_detection::FrameSource,
+        frame_size: (u32, u32),
+        bgra: bool,
+        placement: &crate::api::schema::PaneGraphicsPlacementParams,
+    ) {
+        if !self.graphics_detection.wants_frames() {
+            return;
+        }
+        // A frame that does not fill the pane (a partial image, or a placement
+        // that lags a resize) is skipped; the last read state stays until a
+        // covering frame or an agent change replaces it, so statuses do not
+        // flap during resizes.
+        let (rows, cols, _, _) = self.current_size.get();
+        if !crate::graphics_detection::placement_covers_pane(
+            placement.viewport_col,
+            placement.viewport_row,
+            placement.grid_cols,
+            placement.grid_rows,
+            rows,
+            cols,
+        ) {
+            return;
+        }
+        crate::graphics_detection::submit_frame(
+            &self.graphics_detection,
+            frame,
+            frame_size.0,
+            frame_size.1,
+            bgra,
+        );
     }
 
     pub fn terminal_title(&self) -> Option<String> {
@@ -3525,6 +3582,9 @@ impl PaneRuntime {
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
+                graphics_detection: crate::graphics_detection::GraphicsDetection::new(Arc::new(
+                    AtomicU64::new(0),
+                )),
                 full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
                 detect_reset_notify: Arc::new(Notify::new()),
                 pending_release: Arc::new(Mutex::new(None)),
@@ -4377,6 +4437,9 @@ mod tests {
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            graphics_detection: crate::graphics_detection::GraphicsDetection::new(Arc::new(
+                AtomicU64::new(0),
+            )),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
@@ -4414,6 +4477,9 @@ mod tests {
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            graphics_detection: crate::graphics_detection::GraphicsDetection::new(Arc::new(
+                AtomicU64::new(0),
+            )),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),

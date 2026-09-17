@@ -35,6 +35,7 @@ Automatic detection works out of the box for common coding agents. The table sho
 | Kiro CLI | screen manifest | none |
 | Maki | screen manifest | none |
 | Muse | screen manifest | none |
+| ChatGPT (graphics-drawn web chat, experimental) | pane graphics | none |
 
 Detected but less thoroughly tested: Gemini CLI and Cline. Unsupported agents still run normally as terminal processes. They just may not get rich state unless you add an integration or report state over the socket API.
 
@@ -55,6 +56,14 @@ Integrations marked `session` in the table above are intentionally not lifecycle
 On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint applies only to that foreground process. Herdr cannot see it if you set it only inside a VM or container. Avoid exporting it globally unless every inherited foreground process should be treated as that agent.
 
 Some restricted Linux runtimes do not expose a terminal foreground process group. Start the Herdr server with `HERDR_PROCESS_DETECTION=child-groups` to opt into direct child-process-group inference when native detection is unavailable. Native detection remains preferred, and the default `native` mode never performs this inference. The opt-in mode is best effort: a newer background job can be mistaken for the foreground job. The variable is read by the server and requires a restart; set it in the remote server environment rather than on an attaching client.
+
+## Graphics-drawn chats
+
+A ChatGPT web chat that a terminal browser draws into a pane as file-backed pane graphics has no terminal text, and its process is the browser. Launch the browser with `HERDR_AGENT=chatgpt` so Herdr treats that pane as a `chatgpt` agent, and enable `pane_graphics_detection` under `[experimental]`. Herdr then reads the round button at the right end of the chat composer from the latest frame: a stop square means `working`, and the voice waveform or send arrow means `idle`. A `chatgpt` pane never reports `blocked`. When the button cannot be read, the pane keeps its last state.
+
+Herdr reads only new frames whose image covers the pane, on a background thread and at most twice per second per pane, and it skips classifying a button whose pixels did not change. `chatgpt` cannot be started with `herdr agent start`.
+
+To collect evidence for a misread button, start the server with `HERDR_DEBUG_PAGE_BUTTON_DIR=<dir>`. Herdr then writes a crop of the button and a line to `classifications.log` in that directory each time the reading changes.
 
 ## Blocked state
 

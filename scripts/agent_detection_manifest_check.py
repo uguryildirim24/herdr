@@ -64,7 +64,15 @@ STAGED_PUBLISHED_MANIFESTS = {
     ),
 }
 
-UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
+# Released clients cannot identify `chatgpt` panes, which only exist behind
+# experimental.pane_graphics_detection. Publish the bundled manifest and remove
+# this entry before the first stable release that ships the agent.
+UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {
+    "chatgpt": (
+        "2026.09.16.1",
+        "c2d6110e3efbc7051777320446f42182f8d1c49a7ce9afe7730b823f56a05a3e",
+    ),
+}
 
 
 def parse_args() -> argparse.Namespace:

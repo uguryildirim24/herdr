@@ -24,6 +24,7 @@ mod copy_mode;
 mod detect;
 mod events;
 mod ghostty;
+mod graphics_detection;
 mod handoff_runtime;
 mod input;
 mod integration;
@@ -424,6 +425,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Prompt a parent agent with "BLOCKED <child>" or "GONE <child>" when a nested
 # child agent blocks, exits, or closes.
 # agent_parent_notify = false
+# Read the state of agents drawn as pane graphics, such as a `chatgpt`
+# browser chat, from their frame pixels.
+# pane_graphics_detection = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to

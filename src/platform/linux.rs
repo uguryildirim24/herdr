@@ -237,6 +237,9 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
 
 pub fn raise_server_nofile_limit() {}
 
+/// Background detection threads keep the default priority on Linux.
+pub(crate) fn lower_current_thread_priority() {}
+
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     running_inside_wsl()
 }

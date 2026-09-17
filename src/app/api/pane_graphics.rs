@@ -283,7 +283,7 @@ impl App {
         if let Err(response) = require_enabled(self, &id) {
             return response;
         }
-        let Some((_, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let key = match graphics_key(pane_id, params.layer_id.as_deref()) {
@@ -338,6 +338,11 @@ impl App {
                 "pane graphics inline memory limit reached",
             );
         }
+        // Keep a lease for graphics detection before the layer takes it:
+        // resident direct layers drop their lease once the host acknowledges
+        // the file.
+        let detection_frame =
+            (primary && crate::graphics_detection::is_enabled()).then(|| lease.clone());
         let layer = if direct {
             Layer::direct(
                 params.image_width,
@@ -369,6 +374,9 @@ impl App {
         }
         slot.replace_stream_layer(layer);
         self.pane_graphics.mark_changed();
+        if let Some(frame) = detection_frame {
+            self.submit_pane_graphics_detection_frame(ws_idx, pane_id, frame, &params);
+        }
         encode_success(
             id,
             ResponseResult::PaneGraphicsFrameAck {
@@ -468,6 +476,27 @@ impl App {
         );
         self.pane_graphics.mark_changed();
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn submit_pane_graphics_detection_frame(
+        &self,
+        ws_idx: usize,
+        pane_id: PaneId,
+        frame: crate::pane_graphics_files::Lease,
+        params: &crate::api::schema::PaneGraphicsDirectParams,
+    ) {
+        let Some(runtime) =
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+        else {
+            return;
+        };
+        runtime.submit_graphics_detection_frame(
+            frame,
+            (params.image_width, params.image_height),
+            params.format == crate::api::schema::PaneGraphicsFormat::Bgra,
+            &params.placement,
+        );
     }
 
     fn reclaim_inactive_stream(&mut self, key: &PaneGraphicsKey) {

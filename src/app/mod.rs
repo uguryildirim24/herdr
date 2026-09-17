@@ -369,6 +369,7 @@ impl App {
     ) -> Self {
         let (prefix_code, prefix_mods) = config.prefix_key();
         crate::kitty_graphics::set_enabled(config.kitty_graphics_enabled());
+        crate::graphics_detection::set_enabled(config.experimental.pane_graphics_detection);
         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
@@ -886,6 +887,7 @@ impl App {
                 config.experimental.cjk_ime_cursor_shape.to_decscusr();
             self.persist_pane_history = config.experimental.pane_history;
             self.agent_parent_notify = config.experimental.agent_parent_notify;
+            crate::graphics_detection::set_enabled(config.experimental.pane_graphics_detection);
             if !self.agent_parent_notify {
                 self.agent_parent_links.clear();
             }
