@@ -233,6 +233,8 @@ impl HeadlessServer {
             layer.render,
             layer.z_index,
         ));
+        // The inline frame is presentable at once, so it supersedes the confirmed direct frame.
+        slot.confirmed_direct = None;
         self.app.pane_graphics.mark_changed();
         true
     }
@@ -331,9 +333,7 @@ impl HeadlessServer {
                 if !slot.stream_is_active() {
                     return false;
                 }
-                if let Some(layer) = slot.layer.as_mut() {
-                    layer.mark_resident(client_id);
-                }
+                slot.confirm_direct_layer(client_id);
                 slot.direct_gate.take().expect("matched gate")
             };
             if gate.respond_to.send(gate.success_response).is_err() {

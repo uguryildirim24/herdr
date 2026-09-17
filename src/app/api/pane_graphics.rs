@@ -240,6 +240,7 @@ impl App {
             Slot {
                 host_image_id,
                 layer: None,
+                confirmed_direct: None,
                 stream_owner: Some(params.owner),
                 stream_active: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                     true,
@@ -366,8 +367,7 @@ impl App {
         if !slot.stream_is_active() {
             return encode_error(id, "stream_closed", "pane graphics stream is not active");
         }
-        slot.layer = Some(layer);
-        slot.direct_gate = None;
+        slot.replace_stream_layer(layer);
         self.pane_graphics.mark_changed();
         encode_success(
             id,
@@ -460,6 +460,7 @@ impl App {
                     params.placement,
                     params.z_index,
                 )),
+                confirmed_direct: None,
                 stream_owner,
                 stream_active,
                 direct_gate: None,

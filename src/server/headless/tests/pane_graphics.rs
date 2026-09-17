@@ -1143,6 +1143,238 @@ async fn client_shell_direct_graphics_uploads_without_server_authored_coordinate
 }
 
 #[cfg(unix)]
+fn direct_frame_client_shell_server() -> (
+    HeadlessServer,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    crate::layout::PaneId,
+) {
+    let (mut server, client_rx, pane_id) = retained_test_server(b"direct frame swap");
+    server.app.state.kitty_graphics_enabled = true;
+    let client = server.clients.get_mut(&1).unwrap();
+    client.mode = ClientConnectionMode::ClientShell;
+    client.render_state =
+        crate::server::render_stream::ClientRenderState::new(RenderEncoding::SemanticFrame);
+    client.cell_size = crate::kitty_graphics::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };
+    client.direct_graphics = true;
+    client.pixel_mouse = true;
+    server.app.direct_graphics_available = true;
+    set_stream_owner(&mut server, pane_id, "browser");
+    (server, client_rx, pane_id)
+}
+
+#[cfg(unix)]
+fn submit_direct_frame(
+    server: &mut HeadlessServer,
+    client_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    pane_id: crate::layout::PaneId,
+    sequence: u64,
+) -> (
+    u64,
+    u32,
+    crate::protocol::SurfaceGraphicsAssetKey,
+    std::sync::mpsc::Receiver<String>,
+) {
+    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
+    let path = sparse_direct_frame(server, &format!("frame-{sequence}.rgba"), 1, 1);
+    let (message, response_rx) = direct_stream_message(
+        &format!("frame-{sequence}"),
+        &public_pane_id,
+        "browser",
+        path,
+        1,
+        1,
+        sequence,
+    );
+    assert_eq!(
+        server.handle_pane_graphics_stream_frame(message),
+        RenderImpact::None
+    );
+    match read_server_message(
+        client_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("direct frame upload"),
+    ) {
+        ServerMessage::GraphicsFile {
+            transfer_id,
+            image_id,
+            surface_asset: Some(asset),
+            ..
+        } => (transfer_id, image_id, asset, response_rx),
+        other => panic!("expected direct graphics file, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+fn direct_frame_scene(
+    server: &HeadlessServer,
+    pane_id: crate::layout::PaneId,
+) -> crate::protocol::SurfaceGraphicsScene {
+    let pane = crate::layout::PaneInfo {
+        id: pane_id,
+        rect: ratatui::layout::Rect::new(0, 0, 20, 10),
+        inner_rect: ratatui::layout::Rect::new(0, 0, 20, 10),
+        scrollbar_rect: None,
+        borders: ratatui::widgets::Borders::NONE,
+        is_focused: true,
+    };
+    crate::server::client_shell_graphics::collect(
+        &server.app,
+        &[pane],
+        &[],
+        None,
+        Some(crate::ui::TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        }),
+        crate::kitty_graphics::HostCellSize {
+            width_px: 10,
+            height_px: 20,
+        },
+        &crate::kitty_graphics::surface::DeliveryCache::default(),
+        1,
+    )
+    .0
+}
+
+#[cfg(unix)]
+fn encode_direct_client(client: &mut crate::kitty_graphics::surface::ClientState) -> String {
+    String::from_utf8(client.encode(
+        crate::kitty_graphics::surface::Visibility::Main,
+        (0, 0),
+        None,
+        crate::kitty_graphics::HostCellSize {
+            width_px: 10,
+            height_px: 20,
+        },
+    ))
+    .unwrap()
+}
+
+#[cfg(unix)]
+fn confirm_direct_frame(
+    server: &mut HeadlessServer,
+    transfer_id: u64,
+    image_id: u32,
+    response_rx: &std::sync::mpsc::Receiver<String>,
+) {
+    server.start_direct_graphics_response(1, transfer_id, image_id);
+    assert!(server.complete_direct_graphics(1, transfer_id, image_id, true));
+    assert!(serde_json::from_str::<api::schema::SuccessResponse>(
+        &response_rx.recv_timeout(Duration::from_secs(1)).unwrap()
+    )
+    .is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_frame_stays_placed_until_its_replacement_is_confirmed() {
+    let (mut server, client_rx, pane_id) = direct_frame_client_shell_server();
+    let mut client = crate::kitty_graphics::surface::ClientState::default();
+    client.set_scope(&server.client_shell_boot_id);
+    let _ = client.take_pending_cleanup();
+
+    // Frame N reaches the host and is confirmed before frame N+1 exists.
+    let (transfer_n, image_n, asset_n, response_n) =
+        submit_direct_frame(&mut server, &client_rx, pane_id, 1);
+    client.set_scene(direct_frame_scene(&server, pane_id));
+    assert!(client.trust_direct_asset(&asset_n, image_n));
+    let shown = encode_direct_client(&mut client);
+    assert!(shown.contains(&format!("a=p,i={image_n},")), "{shown}");
+    confirm_direct_frame(&mut server, transfer_n, image_n, &response_n);
+
+    // Frame N+1 is uploaded and the scene reaches the client before the host confirms it.
+    let (transfer_next, image_next, asset_next, response_next) =
+        submit_direct_frame(&mut server, &client_rx, pane_id, 2);
+    assert_ne!(image_next, image_n);
+    let pending = direct_frame_scene(&server, pane_id);
+    assert_eq!(pending.placements.len(), 1);
+    assert_eq!(pending.placements[0].asset, asset_n);
+    assert_eq!(
+        pending.retained_assets,
+        vec![asset_n.clone(), asset_next.clone()]
+    );
+    client.set_scene(pending);
+    let pending = encode_direct_client(&mut client);
+    assert!(
+        !pending.contains(&format!("a=d,d=I,i={image_n},")),
+        "{pending}"
+    );
+    assert!(pending.contains(&format!("a=p,i={image_n},")), "{pending}");
+    assert!(!pending.contains(&format!("i={image_next},")), "{pending}");
+
+    // The host OK for N+1 alone does not retire N; the server has not swapped the placement yet.
+    assert!(client.trust_direct_asset(&asset_next, image_next));
+    let trusted = encode_direct_client(&mut client);
+    assert!(
+        !trusted.contains(&format!("a=d,d=I,i={image_n},")),
+        "{trusted}"
+    );
+    assert!(trusted.contains(&format!("a=p,i={image_n},")), "{trusted}");
+    assert!(
+        !trusted.contains(&format!("a=p,i={image_next},")),
+        "{trusted}"
+    );
+
+    // Once the server adopts N+1, one update deletes N and places N+1 without re-uploading.
+    confirm_direct_frame(&mut server, transfer_next, image_next, &response_next);
+    let swapped = direct_frame_scene(&server, pane_id);
+    assert_eq!(swapped.placements.len(), 1);
+    assert_eq!(swapped.placements[0].asset, asset_next);
+    assert_eq!(swapped.retained_assets, vec![asset_next.clone()]);
+    client.set_scene(swapped);
+    let swapped = encode_direct_client(&mut client);
+    let deleted = swapped
+        .find(&format!("a=d,d=I,i={image_n},"))
+        .unwrap_or_else(|| panic!("N must be deleted by the swap: {swapped}"));
+    let placed = swapped
+        .find(&format!("a=p,i={image_next},"))
+        .unwrap_or_else(|| panic!("N+1 must be placed by the swap: {swapped}"));
+    assert!(deleted < placed, "{swapped}");
+    assert!(!swapped.contains("a=t,t=d"), "{swapped}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn inline_fallback_supersedes_the_confirmed_direct_frame() {
+    let (mut server, client_rx, pane_id) = direct_frame_client_shell_server();
+    let (transfer_n, image_n, asset_n, response_n) =
+        submit_direct_frame(&mut server, &client_rx, pane_id, 1);
+    confirm_direct_frame(&mut server, transfer_n, image_n, &response_n);
+    let (transfer_next, image_next, _asset_next, response_next) =
+        submit_direct_frame(&mut server, &client_rx, pane_id, 2);
+    let key = graphics_key(pane_id);
+    assert!(server.app.pane_graphics.slots[&key]
+        .confirmed_direct
+        .is_some());
+
+    server.start_direct_graphics_response(1, transfer_next, image_next);
+    assert!(server.complete_direct_graphics(1, transfer_next, image_next, false));
+    assert!(serde_json::from_str::<api::schema::SuccessResponse>(
+        &response_next.recv_timeout(Duration::from_secs(1)).unwrap()
+    )
+    .is_ok());
+    let slot = &server.app.pane_graphics.slots[&key];
+    assert!(slot.confirmed_direct.is_none());
+    assert!(slot
+        .layer
+        .as_ref()
+        .and_then(|layer| layer.inline_data())
+        .is_some());
+    let fallback = direct_frame_scene(&server, pane_id);
+    assert_eq!(fallback.placements.len(), 1);
+    assert_ne!(fallback.placements[0].asset, asset_n);
+    assert_eq!(
+        fallback.placements[0].asset.data_fingerprint,
+        slot.layer.as_ref().unwrap().data_fingerprint
+    );
+    assert_eq!(fallback.assets.len(), 1);
+    assert!(fallback.retained_assets.is_empty());
+}
+
+#[cfg(unix)]
 fn direct_gate_server(
     data: &[u8],
 ) -> (
