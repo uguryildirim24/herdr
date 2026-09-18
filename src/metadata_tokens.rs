@@ -92,6 +92,28 @@ impl MetadataTokens {
             .collect()
     }
 
+    /// Values with no TTL. Capture treats a TTL token as already expired.
+    pub(crate) fn persistent_values(&self) -> HashMap<String, String> {
+        self.entries
+            .iter()
+            .filter(|(_, token)| token.expires_at.is_none())
+            .map(|(key, token)| (key.clone(), token.value.clone()))
+            .collect()
+    }
+
+    pub(crate) fn from_values(values: HashMap<String, String>) -> Self {
+        let mut tokens = Self::default();
+        if values.is_empty() {
+            return tokens;
+        }
+        let patch = values
+            .into_iter()
+            .map(|(key, value)| (key, Some(value)))
+            .collect();
+        tokens.patch(patch, None, Instant::now());
+        tokens
+    }
+
     pub(crate) fn next_expiry(&self) -> Option<Instant> {
         self.entries
             .values()
@@ -259,5 +281,24 @@ mod tests {
             tokens.values(),
             HashMap::from([("summary".into(), "persistent".into())])
         );
+    }
+
+    #[test]
+    fn persistent_values_skip_ttl_tokens() {
+        let now = Instant::now();
+        let mut tokens = MetadataTokens::default();
+        tokens.patch(patch(&[("parent", Some("w1:p1"))]), None, now);
+        tokens.patch(
+            patch(&[("done", Some("1"))]),
+            Some(Duration::from_secs(1)),
+            now,
+        );
+        assert_eq!(
+            tokens.persistent_values(),
+            HashMap::from([("parent".into(), "w1:p1".into())])
+        );
+        let restored = MetadataTokens::from_values(tokens.persistent_values());
+        assert_eq!(restored.get("parent"), Some("w1:p1"));
+        assert_eq!(restored.get("done"), None);
     }
 }

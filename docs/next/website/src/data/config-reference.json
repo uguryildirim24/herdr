@@ -1469,6 +1469,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Herdr session."
+        },
+        {
+          "key": "session.restore_tokens",
+          "type": "array",
+          "default": "[\"parent\", \"lane\", \"round\", \"branch\"]",
+          "description": "Pane and workspace metadata token keys restored from a cold session snapshot. Live handoff restores every non-TTL token."
         }
       ]
     },

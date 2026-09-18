@@ -5,8 +5,10 @@ pub mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -128,6 +130,45 @@ fn spawn_named_session_server(
     cmd.env_remove("HERDR_SOCKET_PATH");
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
+
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    register_spawned_herdr_pid(child.process_id());
+    SpawnedHerdr {
+        _master: pair.master,
+        child,
+    }
+}
+
+fn spawn_named_session_server_with(
+    config_home: &Path,
+    runtime_dir: &Path,
+    session_name: &str,
+    config_toml: &str,
+    extra_env: &[(&str, &str)],
+) -> SpawnedHerdr {
+    fs::create_dir_all(config_home.join("herdr-dev")).unwrap();
+    fs::create_dir_all(runtime_dir).unwrap();
+    fs::write(config_home.join("herdr-dev/config.toml"), config_toml).unwrap();
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.arg("server");
+    cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env("HERDR_SESSION", session_name);
+    cmd.env_remove("HERDR_SOCKET_PATH");
+    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("SHELL", "/bin/sh");
+    for (key, value) in extra_env {
+        cmd.env(*key, *value);
+    }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -276,11 +317,51 @@ fn request(socket_path: &Path, request: serde_json::Value) -> serde_json::Value 
     try_request(socket_path, request).unwrap_or_else(|err| panic!("{}", err.message))
 }
 
+fn response_error_code(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+}
+
+fn request_until_ok(
+    socket_path: &Path,
+    body: serde_json::Value,
+    timeout: Duration,
+) -> serde_json::Value {
+    let deadline = Instant::now() + timeout;
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        match try_request(socket_path, body.clone()) {
+            Ok(response) if response.get("result").is_some() => return response,
+            Ok(response) => last = response.to_string(),
+            Err(err) if err.retryable => last = err.message,
+            Err(err) => panic!("{}", err.message),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!(
+        "request did not succeed at {}; last: {last}",
+        socket_path.display()
+    );
+}
+
 fn assert_ok(response: serde_json::Value) {
     assert!(
         response.get("result").is_some(),
         "api request failed: {response}"
     );
+}
+
+fn wait_for_socket_gone(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("socket did not go away at {}", path.display());
 }
 
 fn wait_for_api(socket_path: &Path, timeout: Duration) {
@@ -292,6 +373,14 @@ fn wait_for_api(socket_path: &Path, timeout: Duration) {
             serde_json::json!({"id":"test:ping","method":"ping","params":{}}),
         ) {
             Ok(response) if response.get("result").is_some() => return,
+            Ok(response)
+                if matches!(
+                    response_error_code(&response),
+                    Some("server_unavailable" | "server_handed_off")
+                ) =>
+            {
+                last_error = response.to_string();
+            }
             Ok(response) => panic!("api ping returned non-success response: {response}"),
             Err(err) if !err.retryable => panic!("{}", err.message),
             Err(err) => {
@@ -1660,7 +1749,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{"force":true}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -2082,4 +2171,1095 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 #[test]
 fn live_handoff_after_restored_failure_rolls_back_old_server() {
     live_handoff_import_failure_rolls_back_old_server_at("after_restored");
+}
+
+const DRILL_SESSION_CONFIG: &str = r#"onboarding = false
+[experimental]
+agent_parent_notify = true
+[session]
+resume_agents_on_restore = true
+[terminal]
+shell_mode = "non_login"
+"#;
+
+fn write_executable(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn drill_command(config_home: &Path, runtime_dir: &Path, session: &str, path: &str) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env("HERDR_SESSION", session);
+    cmd.env("PATH", path);
+    cmd.env_remove("HERDR_SOCKET_PATH");
+    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd
+}
+
+fn pane_send(api_socket: &Path, pane_id: &str, text: &str) {
+    assert_ok(request(
+        api_socket,
+        serde_json::json!({
+            "id": "drill:pane:send",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": text, "keys": ["Enter"]}
+        }),
+    ));
+}
+
+fn pane_send_with_path(api_socket: &Path, pane_id: &str, path: &str, text: &str) {
+    pane_send(api_socket, pane_id, &format!("PATH={path} {text}"));
+}
+
+fn wait_for_agent(api_socket: &Path, target: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:agent:wait",
+                "method": "agent.get",
+                "params": {"target": target}
+            }),
+        );
+        if response.get("result").is_some() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "agent was not detected on {target}: {response}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_until_launch_ready(api_socket: &Path, target: &str) {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        let response = request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:agent:pending",
+                "method": "agent.get",
+                "params": {"target": target}
+            }),
+        );
+        last = response.to_string();
+        let pending = response["result"]["agent"]["launch_pending"]
+            .as_bool()
+            .unwrap_or(false);
+        if !pending {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("managed launch still pending on {target}: {last}");
+}
+
+fn wait_for_agent_kind(api_socket: &Path, target: &str, kind: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        match try_request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:agent:kind",
+                "method": "agent.get",
+                "params": {"target": target}
+            }),
+        ) {
+            Ok(response) if response["result"]["agent"]["agent"].as_str() == Some(kind) => {
+                return;
+            }
+            Ok(response) => last = response.to_string(),
+            Err(err) if err.retryable => last = err.message,
+            Err(err) => panic!("{}", err.message),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("agent {target} was not kind {kind}; last: {last}");
+}
+
+fn report_unmanaged_agent(api_socket: &Path, pane_id: &str, agent: &str, session_id: Option<&str>) {
+    let source = format!("herdr:{agent}");
+    if let Some(session_id) = session_id {
+        assert_ok(request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:agent:session",
+                "method": "pane.report_agent_session",
+                "params": {
+                    "pane_id": pane_id,
+                    "source": source.as_str(),
+                    "agent": agent,
+                    "seq": 1,
+                    "agent_session_id": session_id,
+                    "session_start_source": "startup"
+                }
+            }),
+        ));
+    }
+    assert_ok(request(
+        api_socket,
+        serde_json::json!({
+            "id": "drill:agent:report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": source.as_str(),
+                "agent": agent,
+                "state": "idle",
+                "seq": 2
+            }
+        }),
+    ));
+    wait_for_agent(api_socket, pane_id);
+}
+
+fn agent_list(api_socket: &Path) -> serde_json::Value {
+    let response = request_until_ok(
+        api_socket,
+        serde_json::json!({"id":"drill:agent:list","method":"agent.list","params":{}}),
+        Duration::from_secs(15),
+    );
+    assert_ok(response.clone());
+    response
+}
+
+fn agent_names(api_socket: &Path) -> Vec<String> {
+    agent_list(api_socket)["result"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|agent| agent["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn pane_list_ids(api_socket: &Path) -> Vec<String> {
+    let response = request(
+        api_socket,
+        serde_json::json!({"id":"drill:pane:list","method":"pane.list","params":{}}),
+    );
+    assert_ok(response.clone());
+    response["result"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn wait_for_pane_ids(api_socket: &Path, min_count: usize, timeout: Duration) -> Vec<String> {
+    let deadline = Instant::now() + timeout;
+    let mut last = Vec::new();
+    while Instant::now() < deadline {
+        last = pane_list_ids(api_socket);
+        if last.len() >= min_count {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("expected at least {min_count} panes; last={last:?}");
+}
+
+fn pane_pids(api_socket: &Path, pane_id: &str) -> Vec<i32> {
+    let response = request(
+        api_socket,
+        serde_json::json!({
+            "id": "drill:process-info",
+            "method": "pane.process_info",
+            "params": {"pane_id": pane_id}
+        }),
+    );
+    assert_ok(response.clone());
+    let info = &response["result"]["process_info"];
+    let mut pids = Vec::new();
+    if let Some(pid) = info["shell_pid"].as_u64() {
+        pids.push(pid as i32);
+    }
+    if let Some(processes) = info["foreground_processes"].as_array() {
+        for process in processes {
+            if let Some(pid) = process["pid"].as_u64() {
+                pids.push(pid as i32);
+            }
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+fn pids_alive(pids: &[i32]) {
+    for pid in pids {
+        assert_eq!(unsafe { libc::kill(*pid, 0) }, 0, "pid {pid} is not alive");
+    }
+}
+
+fn wait_marker(path: &Path) {
+    support::wait_for_file(path, Duration::from_secs(15));
+}
+
+fn wait_shell_ready(api_socket: &Path, pane_id: &str, marker: &Path) {
+    let _ = fs::remove_file(marker);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        match try_request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:pane:send",
+                "method": "pane.send_input",
+                "params": {"pane_id": pane_id, "text": format!("printf ready > {}", marker.display()), "keys": ["Enter"]}
+            }),
+        ) {
+            Ok(response) if response.get("result").is_some() => {
+                wait_marker(marker);
+                return;
+            }
+            Ok(response) => last = response.to_string(),
+            Err(err) if err.retryable => last = err.message,
+            Err(err) => panic!("{}", err.message),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("pane {pane_id} did not accept input; last: {last}");
+}
+
+fn wait_for_cli_exit_with_logs(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    logs: &[PathBuf],
+) -> i32 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().unwrap() {
+            Some(status) => return status.code().unwrap_or(1),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let mut dump = String::new();
+                for path in logs {
+                    let body = fs::read_to_string(path).unwrap_or_default();
+                    dump.push_str(&format!(
+                        "\n--- {} ---\n{body}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                }
+                panic!("cli child did not exit in {timeout:?}{dump}");
+            }
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+fn split_n_panes(api_socket: &Path, root: &str, count: usize) -> Vec<String> {
+    let mut ids = vec![root.to_string()];
+    let mut current = root.to_string();
+    while ids.len() < count {
+        let split = request(
+            api_socket,
+            serde_json::json!({
+                "id": format!("drill:split:{}", ids.len()),
+                "method": "pane.split",
+                "params": {
+                    "target_pane_id": current,
+                    "direction": if ids.len() % 2 == 0 { "right" } else { "down" },
+                    "focus": true
+                }
+            }),
+        );
+        assert_ok(split.clone());
+        current = split["result"]["pane"]["pane_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        ids.push(current.clone());
+    }
+    ids
+}
+
+#[test]
+fn live_restart_keeps_lane_tree() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let bin = base.join("bin");
+    let session = format!("restart-core-{}", std::process::id());
+    let api_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr.sock"));
+    let client_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr-client.sock"));
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&base).unwrap();
+
+    let claude_started = base.join("claude-started");
+    let cursor_started = base.join("cursor-started");
+    let cursor_argv = base.join("cursor-argv");
+    let pi_started = base.join("pi-started");
+    let pi_session = base.join("lane-a.jsonl");
+    write_executable(
+        &bin.join("claude"),
+        &format!(
+            "#!/bin/sh\nexport HERDR_AGENT=claude\necho started\necho started > {}\n/bin/sleep 600\n:\n",
+            claude_started.display()
+        ),
+    );
+    write_executable(
+        &bin.join("cursor-agent"),
+        &format!(
+            "#!/bin/sh\nexport HERDR_AGENT=cursor\nprintf '%s\\n' \"$0\" \"$@\" > {}\necho started > {}\n/bin/sleep 600\n:\n",
+            cursor_argv.display(),
+            cursor_started.display()
+        ),
+    );
+    write_executable(
+        &bin.join("pi"),
+        &format!(
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 600\n:\n",
+            pi_started.display()
+        ),
+    );
+    write_executable(
+        &bin.join("codex"),
+        "#!/bin/sh\nexport HERDR_AGENT=codex\n/bin/sleep 600\n:\n",
+    );
+    let path = format!("{}:/bin:/usr/bin:/usr/local/bin", bin.display());
+
+    let spawned = spawn_named_session_server_with(
+        &config_home,
+        &runtime_dir,
+        &session,
+        DRILL_SESSION_CONFIG,
+        &[("PATH", path.as_str())],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let old_server_pid = spawned.child.process_id().expect("old server pid") as i32;
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": base.to_string_lossy(), "focus": true, "env": {"PATH": path}}
+        }),
+    );
+    assert_ok(created.clone());
+    let root = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let panes = split_n_panes(&api_socket, &root, 16);
+    assert_eq!(panes.len(), 16);
+    let p1 = &panes[0];
+    let p2 = &panes[1];
+    let p3 = &panes[2];
+    let p16 = &panes[15];
+    let extra = panes[4].clone();
+    let ghost = &panes[3];
+
+    wait_shell_ready(&api_socket, p1, &base.join("p1-ready"));
+    pane_send_with_path(
+        &api_socket,
+        p1,
+        &path,
+        &bin.join("claude").display().to_string(),
+    );
+    wait_marker(&claude_started);
+    report_unmanaged_agent(&api_socket, p1, "claude", Some("hcoord-session"));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:p1:rename",
+            "method": "agent.rename",
+            "params": {"target": p1, "name": "hcoord"}
+        }),
+    ));
+
+    wait_shell_ready(&api_socket, p2, &base.join("p2-ready"));
+    pane_send(&api_socket, p2, "sleep 3600 &");
+    thread::sleep(Duration::from_millis(200));
+
+    wait_shell_ready(&api_socket, p3, &base.join("p3-ready"));
+    pane_send(&api_socket, p3, &format!("export PATH={path}"));
+    let started = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:p3:start",
+            "method": "agent.start",
+            "params": {
+                "name": "lane-a",
+                "kind": "pi",
+                "pane_id": p3,
+                "args": ["--force", "--model", "m"],
+                "timeout_ms": 15000
+            }
+        }),
+    );
+    assert_ok(started);
+    wait_marker(&pi_started);
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:p3:report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": p3,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "idle",
+                "seq": 1,
+                "agent_session_path": pi_session.to_string_lossy()
+            }
+        }),
+    ));
+    wait_for_agent(&api_socket, p3);
+    thread::sleep(Duration::from_secs(4));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:p3:tokens",
+            "method": "pane.report_metadata",
+            "params": {
+                "pane_id": p3,
+                "source": "drill",
+                "tokens": {"lane": "lane-a", "done": "1", "parent": p1}
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:ws:tokens",
+            "method": "workspace.report_metadata",
+            "params": {
+                "workspace_id": workspace_id,
+                "source": "drill",
+                "tokens": {"round": "r1"}
+            }
+        }),
+    ));
+
+    wait_shell_ready(&api_socket, ghost, &base.join("ghost-ready"));
+    pane_send_with_path(
+        &api_socket,
+        ghost,
+        &path,
+        &bin.join("claude").display().to_string(),
+    );
+    wait_for_output(&api_socket, ghost, "started");
+    // Row 12 needs a name with no native resume plan. A claude session id would
+    // type `claude --resume` on cold restore and keep the name (spec §4.2).
+    report_unmanaged_agent(&api_socket, ghost, "claude", None);
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:ghost:rename",
+            "method": "agent.rename",
+            "params": {"target": ghost, "name": "ghost"}
+        }),
+    ));
+
+    for extra in &panes[4..15] {
+        pane_send(&api_socket, extra, "sleep 600");
+    }
+
+    // Row 8: bad --exec must not move the server pid or disconnect a TUI.
+    let endpoint_generation = support::CURRENT_ENDPOINT_PROTOCOL_GENERATION;
+    let mut client_stream = UnixStream::connect(&client_socket).unwrap();
+    let (server_generation, error) =
+        client_shell_handshake(&mut client_stream, endpoint_generation, 54, 23).unwrap();
+    assert_eq!(server_generation, endpoint_generation);
+    assert!(error.is_none(), "client shell handshake failed: {error:?}");
+    assert!(
+        wait_for_message_variant(
+            &mut client_stream,
+            Duration::from_secs(5),
+            SERVER_MESSAGE_ENDPOINT_CONTROL,
+        )
+        .unwrap(),
+        "client shell should receive a snapshot before the refused restart"
+    );
+    let bad_exec = drill_command(&config_home, &runtime_dir, &session, &path)
+        .args(["server", "restart", "--exec", "/nonexistent/herdr"])
+        .output()
+        .unwrap();
+    let bad_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&bad_exec.stdout),
+        String::from_utf8_lossy(&bad_exec.stderr)
+    );
+    assert!(
+        bad_text.contains("invalid_exec"),
+        "row 8 should return invalid_exec: {bad_text}"
+    );
+    assert_eq!(
+        spawned
+            .child
+            .process_id()
+            .expect("server pid after bad exec") as i32,
+        old_server_pid
+    );
+    assert!(
+        !wait_for_message_variant(
+            &mut client_stream,
+            Duration::from_millis(400),
+            SERVER_MESSAGE_SERVER_SHUTDOWN,
+        )
+        .unwrap(),
+        "row 8 must not disconnect the TUI"
+    );
+    drop(client_stream);
+
+    // Row 9: pending agent start refuses restart without --force.
+    wait_shell_ready(&api_socket, p16, &base.join("p16-ready"));
+    pane_send(&api_socket, p16, &format!("export PATH={path}"));
+    let busy_pane = p16.clone();
+    let busy_socket = api_socket.clone();
+    let busy = thread::spawn(move || {
+        request(
+            &busy_socket,
+            serde_json::json!({
+                "id": "drill:busy-start",
+                "method": "agent.start",
+                "params": {
+                    "name": "busy-lane",
+                    "kind": "codex",
+                    "pane_id": busy_pane,
+                    "timeout_ms": 15000
+                }
+            }),
+        )
+    });
+    thread::sleep(Duration::from_millis(250));
+    let busy_restart = drill_command(&config_home, &runtime_dir, &session, &path)
+        .args(["server", "restart"])
+        .output()
+        .unwrap();
+    let busy_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&busy_restart.stdout),
+        String::from_utf8_lossy(&busy_restart.stderr)
+    );
+    assert!(
+        busy_text.contains("restart_busy"),
+        "row 9 should return restart_busy: {busy_text}"
+    );
+    let _ = busy.join();
+    thread::sleep(Duration::from_secs(4));
+    wait_for_agent(&api_socket, p16);
+
+    let agent_wait_out = fs::File::create(base.join("agent-wait.out")).unwrap();
+    let agent_wait_err = fs::File::create(base.join("agent-wait.err")).unwrap();
+    let mut agent_wait = drill_command(&config_home, &runtime_dir, &session, &path)
+        .args([
+            "agent",
+            "wait",
+            "lane-a",
+            "--until",
+            "blocked",
+            "--timeout",
+            "60000",
+        ])
+        .stdout(Stdio::from(agent_wait_out))
+        .stderr(Stdio::from(agent_wait_err))
+        .spawn()
+        .unwrap();
+    let pane_wait_out = fs::File::create(base.join("pane-wait.out")).unwrap();
+    let pane_wait_err = fs::File::create(base.join("pane-wait.err")).unwrap();
+    let mut pane_wait = drill_command(&config_home, &runtime_dir, &session, &path)
+        .args([
+            "pane",
+            "wait-output",
+            p2,
+            "--match",
+            "DRILL_PANE_WAIT_TOKEN",
+            "--timeout",
+            "60000",
+        ])
+        .stdout(Stdio::from(pane_wait_out))
+        .stderr(Stdio::from(pane_wait_err))
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(200));
+
+    let ids_before = pane_list_ids(&api_socket);
+    let mut pids_before = Vec::new();
+    for pane_id in &panes {
+        pids_before.extend(pane_pids(&api_socket, pane_id));
+    }
+    pids_before.sort_unstable();
+    pids_before.dedup();
+    pids_alive(&pids_before);
+
+    let herdr = env!("CARGO_BIN_EXE_herdr");
+    let restart_out = base.join("restart.out");
+    pane_send(
+        &api_socket,
+        p2,
+        &format!(
+            "XDG_CONFIG_HOME='{config}' XDG_RUNTIME_DIR='{runtime}' HERDR_SESSION='{session}' env -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH '{herdr}' server restart > '{out}' 2>&1; echo EXIT:$? >> '{out}'",
+            config = config_home.display(),
+            runtime = runtime_dir.display(),
+            session = session,
+            herdr = herdr,
+            out = restart_out.display()
+        ),
+    );
+    wait_for_file_contains(&restart_out, "EXIT:0", Duration::from_secs(30));
+    wait_for_api(&api_socket, Duration::from_secs(15));
+
+    // Rows 1-3, 7.
+    pids_alive(&pids_before);
+    let listed = request_until_ok(
+        &api_socket,
+        serde_json::json!({"id":"drill:pane:list","method":"pane.list","params":{}}),
+        Duration::from_secs(20),
+    );
+    assert_ok(listed.clone());
+    let mut ids_after: Vec<String> = listed["result"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+        .collect();
+    let mut ids_before_sorted = ids_before.clone();
+    ids_before_sorted.sort();
+    ids_after.sort();
+    assert_eq!(ids_after, ids_before_sorted, "row 2 public ids");
+    let names_response = request_until_ok(
+        &api_socket,
+        serde_json::json!({"id":"drill:agent:list","method":"agent.list","params":{}}),
+        Duration::from_secs(20),
+    );
+    assert_ok(names_response.clone());
+    let names: Vec<String> = names_response["result"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|agent| agent["name"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        names.contains(&"hcoord".to_string()),
+        "row 3 missing hcoord: {names:?}"
+    );
+    assert!(
+        names.contains(&"lane-a".to_string()),
+        "row 3 missing lane-a: {names:?}"
+    );
+
+    let list_out = base.join("agent-list.out");
+    pane_send(
+        &api_socket,
+        p2,
+        &format!(
+            "$HERDR_BIN_PATH agent list > {} 2>&1; echo EXIT:$? >> {}",
+            list_out.display(),
+            list_out.display()
+        ),
+    );
+    wait_for_file_contains(&list_out, "EXIT:0", Duration::from_secs(10));
+
+    wait_for_agent_kind(&api_socket, "lane-a", "pi");
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:lane-a:session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": p3,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "seq": 50,
+                "agent_session_path": pi_session.to_string_lossy(),
+                "session_start_source": "new"
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:lane-a:blocked",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": p3,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "blocked",
+                "seq": 51,
+                "agent_session_path": pi_session.to_string_lossy()
+            }
+        }),
+    ));
+    let blocked = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:lane-a:get",
+            "method": "agent.get",
+            "params": {"target": "lane-a"}
+        }),
+    );
+    assert_eq!(
+        blocked["result"]["agent"]["agent_status"].as_str(),
+        Some("blocked"),
+        "lane-a should be blocked after report: {blocked}"
+    );
+    pane_send(&api_socket, p2, "echo DRILL_PANE_WAIT_TOKEN");
+    assert_eq!(
+        wait_for_cli_exit_with_logs(
+            &mut agent_wait,
+            Duration::from_secs(20),
+            &[
+                base.join("agent-wait.out"),
+                base.join("agent-wait.err"),
+                base.join("restart.out")
+            ]
+        ),
+        0
+    );
+    assert_eq!(
+        wait_for_cli_exit_with_logs(
+            &mut pane_wait,
+            Duration::from_secs(20),
+            &[base.join("pane-wait.out"), base.join("pane-wait.err")]
+        ),
+        0
+    );
+
+    // Row 12: a named fake with no resume plan comes back unnamed after cold restore.
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"drill:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    wait_for_socket_gone(&api_socket, Duration::from_secs(10));
+    wait_for_socket_gone(&client_socket, Duration::from_secs(5));
+    let restored = spawn_named_session_server_with(
+        &config_home,
+        &runtime_dir,
+        &session,
+        DRILL_SESSION_CONFIG,
+        &[("PATH", path.as_str())],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+    wait_for_api(&api_socket, Duration::from_secs(15));
+    let cold_ids = wait_for_pane_ids(&api_socket, 16, Duration::from_secs(15));
+    let ghost = if cold_ids.iter().any(|id| id == &extra) {
+        extra
+    } else {
+        cold_ids[4].clone()
+    };
+    let cold_names = agent_names(&api_socket);
+    assert!(
+        !cold_names.iter().any(|name| name == "ghost"),
+        "row 12 ghost name should be dropped on cold restore: {cold_names:?}"
+    );
+    let _ = fs::remove_file(&pi_started);
+    wait_shell_ready(&api_socket, &ghost, &base.join("ghost-cold-ready"));
+    pane_send(&api_socket, &ghost, &format!("export PATH={path}"));
+    let ghost_start = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "drill:ghost:start",
+            "method": "agent.start",
+            "params": {
+                "name": "ghost",
+                "kind": "pi",
+                "pane_id": ghost,
+                "timeout_ms": 15000
+            }
+        }),
+    );
+    assert_ok(ghost_start);
+    wait_marker(&pi_started);
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"drill:stop-final","method":"server.stop","params":{}}),
+    );
+    drop(restored);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn live_restart_keeps_lane_tree_lineage() {
+    // Rows 4, 6, 10, 11, and 13: token persist, GONE notify,
+    // managed_agent_args replay, cold name restore.
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let bin = base.join("bin");
+    let session = format!("restart-core-lineage-{}", std::process::id());
+    let api_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr.sock"));
+    let client_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr-client.sock"));
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&base).unwrap();
+    let cursor_started = base.join("cursor-started");
+    let cursor_argv = base.join("cursor-argv");
+    let claude_started = base.join("claude-started");
+    write_executable(
+        &bin.join("claude"),
+        &format!(
+            "#!/bin/sh\nexport HERDR_AGENT=claude\necho started\necho started > {}\n/bin/sleep 600\n:\n",
+            claude_started.display()
+        ),
+    );
+    write_executable(
+        &bin.join("cursor-agent"),
+        &format!(
+            "#!/bin/sh\nexport HERDR_AGENT=cursor\nprintf '%s\\n' \"$0\" \"$@\" > {}\necho started > {}\n/bin/sleep 600\n:\n",
+            cursor_argv.display(),
+            cursor_started.display()
+        ),
+    );
+    let path = format!("{}:/bin:/usr/bin:/usr/local/bin", bin.display());
+    let spawned = spawn_named_session_server_with(
+        &config_home,
+        &runtime_dir,
+        &session,
+        DRILL_SESSION_CONFIG,
+        &[("PATH", path.as_str())],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+    register_runtime_dir(&runtime_dir);
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": base.to_string_lossy(), "focus": true, "env": {"PATH": path}}
+        }),
+    );
+    assert_ok(created.clone());
+    let root = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let panes = split_n_panes(&api_socket, &root, 16);
+    let p1 = &panes[0];
+    let p2 = &panes[1];
+    let p3 = &panes[2];
+    wait_shell_ready(&api_socket, p1, &base.join("p1-ready"));
+    pane_send_with_path(
+        &api_socket,
+        p1,
+        &path,
+        &bin.join("claude").display().to_string(),
+    );
+    wait_marker(&claude_started);
+    report_unmanaged_agent(&api_socket, p1, "claude", Some("hcoord-session"));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p1:rename",
+            "method": "agent.rename",
+            "params": {"target": p1, "name": "hcoord"}
+        }),
+    ));
+    pane_send(&api_socket, p2, "sleep 3600 &");
+    wait_shell_ready(&api_socket, p3, &base.join("p3-ready"));
+    pane_send(&api_socket, p3, &format!("export PATH={path}"));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p3:start",
+            "method": "agent.start",
+            "params": {
+                "name": "lane-a",
+                "kind": "cursor",
+                "pane_id": p3,
+                "args": ["--force", "--model", "m"],
+                "timeout_ms": 15000
+            }
+        }),
+    ));
+    wait_marker(&cursor_started);
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p3:session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": p3,
+                "source": "herdr:cursor",
+                "agent": "cursor",
+                "seq": 1,
+                "agent_session_id": "cursor-lineage-session",
+                "session_start_source": "startup"
+            }
+        }),
+    ));
+    // herdr:cursor is a reserved native state source, so it cannot set hook
+    // idle. A custom source can, and that lets Pending clear after settle.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p3:report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": p3,
+                "source": "custom:drill",
+                "agent": "cursor",
+                "state": "idle",
+                "seq": 2
+            }
+        }),
+    ));
+    wait_for_agent(&api_socket, p3);
+    wait_until_launch_ready(&api_socket, p3);
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p3:tokens",
+            "method": "pane.report_metadata",
+            "params": {
+                "pane_id": p3,
+                "source": "drill",
+                "tokens": {"lane": "lane-a", "done": "1", "parent": p1}
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:ws:tokens",
+            "method": "workspace.report_metadata",
+            "params": {
+                "workspace_id": workspace_id,
+                "source": "drill",
+                "tokens": {"round": "r1"}
+            }
+        }),
+    ));
+    let restart = drill_command(&config_home, &runtime_dir, &session, &path)
+        .args(["server", "restart"])
+        .output()
+        .unwrap();
+    assert!(restart.status.success(), "restart failed: {restart:?}");
+    wait_for_api(&api_socket, Duration::from_secs(15));
+
+    let agents = agent_list(&api_socket);
+    let lane = agents["result"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["name"].as_str() == Some("lane-a"))
+        .expect("lane-a");
+    // Row 4: live handoff keeps pane tokens and the workspace round token.
+    assert_eq!(lane["tokens"]["parent"], *p1);
+    assert_eq!(lane["tokens"]["lane"], "lane-a");
+    assert_eq!(lane["tokens"]["done"], "1");
+    let workspace = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:workspace:get",
+            "method": "workspace.get",
+            "params": {"workspace_id": workspace_id}
+        }),
+    );
+    assert_eq!(workspace["result"]["workspace"]["tokens"]["round"], "r1");
+
+    // Row 6: killing the child fake after restart notifies the parent.
+    let child_pids = pane_pids(&api_socket, p3);
+    for pid in child_pids {
+        if pid > 1 {
+            let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw_gone = false;
+    while Instant::now() < deadline {
+        let read = request(
+            &api_socket,
+            serde_json::json!({
+                "id": "lineage:p1:read",
+                "method": "pane.read",
+                "params": {
+                    "pane_id": p1,
+                    "source": "recent",
+                    "lines": 40,
+                    "format": "text",
+                    "strip_ansi": true
+                }
+            }),
+        );
+        let text = read["result"]["read"]["text"].as_str().unwrap_or_default();
+        if text.contains("GONE") && text.contains("lane-a") {
+            saw_gone = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(saw_gone, "row 6 parent pane should show GONE lane-a");
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"lineage:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    wait_for_socket_gone(&api_socket, Duration::from_secs(10));
+    wait_for_socket_gone(&client_socket, Duration::from_secs(5));
+    let _cursor_argv_before = fs::read_to_string(&cursor_argv).unwrap_or_default();
+    let _ = fs::remove_file(&cursor_argv);
+    let _ = fs::remove_file(&cursor_started);
+    let restored = spawn_named_session_server_with(
+        &config_home,
+        &runtime_dir,
+        &session,
+        DRILL_SESSION_CONFIG,
+        &[("PATH", path.as_str())],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(15));
+    wait_for_api(&api_socket, Duration::from_secs(15));
+    wait_marker(&cursor_started);
+    let argv = wait_for_file_contains(&cursor_argv, "--resume", Duration::from_secs(10));
+    // Row 10: cold resume replays --resume <id> --force --model m.
+    assert!(argv.contains("--resume"), "{argv}");
+    assert!(argv.contains("--force"), "{argv}");
+    assert!(argv.contains("--model"), "{argv}");
+    let cold_names = agent_names(&api_socket);
+    // Row 11: hcoord has a typed plan, so the name returns on cold restore.
+    assert!(
+        cold_names.contains(&"hcoord".to_string()),
+        "row 11 missing hcoord: {cold_names:?}"
+    );
+    let cold_agents = agent_list(&api_socket);
+    let cold_lane = cold_agents["result"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| {
+            agent["name"].as_str() == Some("lane-a") || agent["pane_id"].as_str() == Some(p3)
+        });
+    if let Some(cold_lane) = cold_lane {
+        // Row 13: parent and lane restore; done is TTL-like and must not.
+        assert_eq!(cold_lane["tokens"]["parent"], *p1);
+        assert_eq!(cold_lane["tokens"]["lane"], "lane-a");
+        assert!(
+            cold_lane["tokens"].get("done").is_none()
+                || cold_lane["tokens"]["done"].as_str() != Some("1"),
+            "row 13 must not restore done"
+        );
+    } else {
+        panic!("row 13 missing restored lane-a pane");
+    }
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"lineage:stop-final","method":"server.stop","params":{}}),
+    );
+    drop(restored);
+    cleanup_test_base(&base);
 }

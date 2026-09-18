@@ -29,19 +29,31 @@ pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     let mut command = super::spec::command();
-    if matches!(shell, Shell::Zsh) {
-        let mut output = Vec::new();
-        generate(shell, &mut command, "herdr", &mut output);
-        let script = String::from_utf8(output).map_err(|err| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error())
-        })?;
-        crate::platform::begin_cli_output();
-        std::io::stdout().write_all(space_separated_zsh_long_options(&script).as_bytes())?;
+    let mut output = Vec::new();
+    generate(shell, &mut command, "herdr", &mut output);
+    let script = String::from_utf8(output)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error()))?;
+    let script = omit_hidden_live_handoff_completion(&script);
+    let script = if matches!(shell, Shell::Zsh) {
+        space_separated_zsh_long_options(&script)
     } else {
-        crate::platform::begin_cli_output();
-        generate(shell, &mut command, "herdr", &mut std::io::stdout());
-    }
+        script
+    };
+    crate::platform::begin_cli_output();
+    std::io::stdout().write_all(script.as_bytes())?;
     Ok(0)
+}
+
+fn omit_hidden_live_handoff_completion(script: &str) -> String {
+    let mut filtered = script
+        .lines()
+        .filter(|line| !line.contains("live-handoff"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if script.ends_with('\n') && !filtered.ends_with('\n') {
+        filtered.push('\n');
+    }
+    filtered
 }
 
 fn space_separated_zsh_long_options(script: &str) -> String {
@@ -111,5 +123,13 @@ mod tests {
         assert!(normalized.contains("'--split[]:DIRECTION:(right down)'"));
         assert!(!normalized.contains("--cwd=[]"));
         assert!(!normalized.contains("--split=[]"));
+    }
+
+    #[test]
+    fn omits_hidden_live_handoff_from_generated_script() {
+        let script = "'restart:Replace the running local server and keep pane processes' \\\n'live-handoff:Hidden alias of server restart' \\\n";
+        let filtered = super::omit_hidden_live_handoff_completion(script);
+        assert!(filtered.contains("restart"));
+        assert!(!filtered.contains("live-handoff"));
     }
 }

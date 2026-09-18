@@ -262,18 +262,31 @@ pub struct TerminalConfig {
     pub kitty_graphics: Option<bool>,
 }
 
+fn default_restore_tokens() -> Vec<String> {
+    ["parent", "lane", "round", "branch"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Pane and workspace metadata token keys restored from a cold session
+    /// snapshot. Live handoff restores every non-TTL token. Default: parent,
+    /// lane, round, branch.
+    #[serde(default = "default_restore_tokens")]
+    pub restore_tokens: Vec<String>,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            restore_tokens: default_restore_tokens(),
         }
     }
 }
@@ -1444,6 +1457,29 @@ resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+    }
+
+    #[test]
+    fn restore_tokens_default_to_lane_tree_keys_and_parse() {
+        let default_config = Config::default();
+        assert_eq!(
+            default_config.session.restore_tokens,
+            vec!["parent", "lane", "round", "branch"]
+        );
+
+        let omitted: Config =
+            toml::from_str("[session]\nresume_agents_on_restore = true\n").unwrap();
+        assert_eq!(
+            omitted.session.restore_tokens,
+            vec!["parent", "lane", "round", "branch"]
+        );
+
+        let toml = r#"
+[session]
+restore_tokens = ["parent", "done"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.session.restore_tokens, vec!["parent", "done"]);
     }
 
     #[test]

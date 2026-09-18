@@ -1679,6 +1679,16 @@ impl App {
         else {
             return pane_not_found(id, &params.pane_id);
         };
+        if !self.state.terminals.contains_key(&terminal_id) {
+            return pane_not_found(id, &params.pane_id);
+        }
+        if let Some(tokens) = tokens.as_ref() {
+            if let Some((code, message)) =
+                self.parent_token_patch_error(ws_idx, pane_id, tokens, ttl)
+            {
+                return encode_error(id, code, message);
+            }
+        }
         let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1757,6 +1767,67 @@ impl App {
         }
 
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn parent_token_patch_error(
+        &self,
+        target_ws: usize,
+        target_pane: crate::layout::PaneId,
+        tokens: &std::collections::HashMap<String, Option<String>>,
+        ttl: Option<std::time::Duration>,
+    ) -> Option<(&'static str, &'static str)> {
+        match tokens.get(crate::app::agent_parents::PARENT_TOKEN) {
+            None => None,
+            Some(None) => None,
+            Some(Some(_)) if ttl.is_some() => {
+                Some(("invalid_metadata_token", "parent cannot have a ttl"))
+            }
+            Some(Some(parent_value))
+                if self.parent_value_would_cycle(target_ws, target_pane, parent_value) =>
+            {
+                Some((
+                    "parent_cycle",
+                    "parent would make this pane its own ancestor",
+                ))
+            }
+            Some(Some(_)) => None,
+        }
+    }
+
+    fn parent_value_would_cycle(
+        &self,
+        target_ws: usize,
+        target_pane: crate::layout::PaneId,
+        parent_value: &str,
+    ) -> bool {
+        let mut current = parent_value.to_string();
+        let mut visited = std::collections::HashSet::new();
+        visited.insert((target_ws, target_pane));
+        loop {
+            let Some((ws_idx, pane_id)) = self.parse_pane_id(&current) else {
+                return false;
+            };
+            if (ws_idx, pane_id) == (target_ws, target_pane) {
+                return true;
+            }
+            if !visited.insert((ws_idx, pane_id)) {
+                return false;
+            }
+            match self.pane_parent_token(ws_idx, pane_id) {
+                Some(next) => current = next,
+                None => return false,
+            }
+        }
+    }
+
+    fn pane_parent_token(&self, ws_idx: usize, pane_id: crate::layout::PaneId) -> Option<String> {
+        let terminal_id = self.state.workspaces.get(ws_idx)?.terminal_id(pane_id)?;
+        self.state
+            .terminals
+            .get(terminal_id)?
+            .metadata_tokens
+            .get(crate::app::agent_parents::PARENT_TOKEN)
+            .map(str::to_string)
     }
 
     pub(super) fn handle_pane_clear_agent_authority(
@@ -4517,5 +4588,189 @@ mod tests {
 
             assert_eq!(metadata_error_code(&response), "invalid_metadata_ttl");
         }
+    }
+
+    fn app_with_panes(count: usize) -> (App, Vec<String>) {
+        let (mut app, first) = app_with_test_workspace();
+        let mut ids = vec![first];
+        for _ in 1..count {
+            let pane_id =
+                app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+            app.state.ensure_test_terminals();
+            ids.push(app.public_pane_id(0, pane_id).unwrap());
+        }
+        (app, ids)
+    }
+
+    fn report_parent(app: &mut App, pane_id: &str, parent: Option<&str>) -> String {
+        let mut params = metadata_params(pane_id.to_string());
+        params.title = None;
+        params.tokens =
+            std::collections::HashMap::from([("parent".into(), parent.map(str::to_string))]);
+        app.handle_pane_report_metadata("req".into(), params)
+    }
+
+    fn pane_tokens(app: &App, public_pane_id: &str) -> std::collections::HashMap<String, String> {
+        let (ws_idx, pane_id) = app.parse_pane_id(public_pane_id).unwrap();
+        let terminal_id = app.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        app.state.terminals[&terminal_id].metadata_tokens.values()
+    }
+
+    fn assert_parent_cycle(response: &str) {
+        let response: ErrorResponse = serde_json::from_str(response).unwrap();
+        assert_eq!(response.error.code, "parent_cycle");
+        assert_eq!(
+            response.error.message,
+            "parent would make this pane its own ancestor"
+        );
+    }
+
+    #[test]
+    fn pane_parent_a_to_b_is_allowed() {
+        let (mut app, panes) = app_with_panes(2);
+        let response = report_parent(&mut app, &panes[1], Some(&panes[0]));
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            pane_tokens(&app, &panes[1]).get("parent").unwrap(),
+            &panes[0]
+        );
+    }
+
+    #[test]
+    fn pane_parent_self_is_a_cycle() {
+        let (mut app, panes) = app_with_panes(1);
+        let response = report_parent(&mut app, &panes[0], Some(&panes[0]));
+        assert_parent_cycle(&response);
+        assert!(!pane_tokens(&app, &panes[0]).contains_key("parent"));
+    }
+
+    #[test]
+    fn pane_parent_to_descendant_is_a_cycle() {
+        let (mut app, panes) = app_with_panes(3);
+        // panes[1] -> panes[0], panes[2] -> panes[1]  =>  2 under 1 under 0
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[2], Some(&panes[1]))).unwrap();
+
+        let response = report_parent(&mut app, &panes[0], Some(&panes[2]));
+        assert_parent_cycle(&response);
+        assert!(!pane_tokens(&app, &panes[0]).contains_key("parent"));
+    }
+
+    #[test]
+    fn pane_parent_to_ancestors_sibling_is_allowed() {
+        let (mut app, panes) = app_with_panes(4);
+        // 1 and 2 under 0 (siblings). 3 under 1. 3 -> 2 is ancestor 1's sibling.
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[2], Some(&panes[0]))).unwrap();
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[3], Some(&panes[1]))).unwrap();
+
+        let response = report_parent(&mut app, &panes[3], Some(&panes[2]));
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            pane_tokens(&app, &panes[3]).get("parent").unwrap(),
+            &panes[2]
+        );
+    }
+
+    #[test]
+    fn pane_parent_clear_is_always_allowed() {
+        let (mut app, panes) = app_with_panes(2);
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();
+        let response = report_parent(&mut app, &panes[1], None);
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(!pane_tokens(&app, &panes[1]).contains_key("parent"));
+    }
+
+    #[test]
+    fn pane_parent_cycle_walk_includes_a_shell_pane() {
+        let (mut app, panes) = app_with_panes(3);
+        // All test panes are shells (no agent). 1 -> 2 (shell), then 2 -> 1 is a cycle.
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[2]))).unwrap();
+        let response = report_parent(&mut app, &panes[2], Some(&panes[1]));
+        assert_parent_cycle(&response);
+        assert_eq!(
+            pane_tokens(&app, &panes[1]).get("parent").unwrap(),
+            &panes[2]
+        );
+        assert!(!pane_tokens(&app, &panes[2]).contains_key("parent"));
+    }
+
+    #[test]
+    fn pane_parent_unparseable_value_is_ignored_by_the_walk() {
+        let (mut app, panes) = app_with_panes(1);
+        let response = report_parent(&mut app, &panes[0], Some("not-a-pane"));
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            pane_tokens(&app, &panes[0]).get("parent").unwrap(),
+            "not-a-pane"
+        );
+    }
+
+    #[test]
+    fn pane_parent_with_ttl_is_rejected() {
+        let (mut app, panes) = app_with_panes(2);
+        let mut params = metadata_params(panes[1].clone());
+        params.title = None;
+        params.tokens =
+            std::collections::HashMap::from([("parent".into(), Some(panes[0].clone()))]);
+        params.ttl_ms = Some(1_000);
+        let response = app.handle_pane_report_metadata("req".into(), params);
+        assert_eq!(metadata_error_code(&response), "invalid_metadata_token");
+        assert!(!pane_tokens(&app, &panes[1]).contains_key("parent"));
+    }
+
+    #[test]
+    fn pane_parent_cycle_leaves_the_existing_token_unchanged() {
+        let (mut app, panes) = app_with_panes(2);
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();
+        let response = report_parent(&mut app, &panes[1], Some(&panes[1]));
+        assert_parent_cycle(&response);
+        assert_eq!(
+            pane_tokens(&app, &panes[1]).get("parent").unwrap(),
+            &panes[0]
+        );
+    }
+
+    #[test]
+    fn agent_start_with_cyclic_parent_returns_parent_cycle_and_launches_nothing() {
+        // Lane B's start_agent hook applies AgentStartParams.parent through the
+        // pane report-metadata gate before typing.
+        let (mut app, panes) = app_with_panes(2);
+        let _: SuccessResponse =
+            serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "start".into(),
+            method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
+                name: "worker".into(),
+                kind: "pi".into(),
+                pane_id: panes[0].clone(),
+                args: Vec::new(),
+                timeout_ms: Some(4_000),
+                parent: Some(panes[1].clone()),
+            }),
+        });
+        assert_parent_cycle(&response);
+        let (ws_idx, pane_id) = app.parse_pane_id(&panes[0]).unwrap();
+        let terminal_id = app.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        assert!(app.state.terminals[&terminal_id]
+            .managed_agent_kind()
+            .is_none());
+        assert!(app.state.terminals[&terminal_id].agent_name.is_none());
     }
 }

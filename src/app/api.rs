@@ -2233,7 +2233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
+    async fn pane_died_respawns_shell_and_keeps_persisted_agent_session() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -2277,7 +2277,11 @@ mod tests {
             .get(&terminal_id)
             .expect("terminal should survive respawn");
         assert!(!terminal.respawn_shell_on_exit);
-        assert!(terminal.persisted_agent_session.is_none());
+        // Keep the session ref so a later stop+cold restore can still type
+        // the native resume plan (spec §4.2 / drill row 10). Live identity
+        // (name, detected agent) is still cleared.
+        assert!(terminal.persisted_agent_session.is_some());
+        assert!(terminal.pending_agent_resume_plan.is_none());
         assert!(terminal.agent_name.is_none());
 
         for (_, runtime) in app.terminal_runtimes.drain() {

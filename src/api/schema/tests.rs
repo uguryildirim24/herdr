@@ -100,14 +100,34 @@ fn agent_start_and_prompt_requests_round_trip() {
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
             timeout_ms: Some(30_000),
+            parent: None,
         }),
     };
     let start_json = serde_json::to_value(&start).unwrap();
     assert_eq!(start_json["method"], "agent.start");
     assert_eq!(start_json["params"]["pane_id"], "w1:p2");
+    assert!(start_json["params"].get("parent").is_none());
     assert_eq!(
         serde_json::from_value::<Request>(start_json).unwrap(),
         start
+    );
+
+    let start_with_parent = Request {
+        id: "start-parent".into(),
+        method: Method::AgentStart(AgentStartParams {
+            name: "reviewer".into(),
+            kind: "pi".into(),
+            pane_id: "w1:p2".into(),
+            args: vec!["--no-session".into()],
+            timeout_ms: Some(30_000),
+            parent: Some("w1:p1".into()),
+        }),
+    };
+    let start_with_parent_json = serde_json::to_value(&start_with_parent).unwrap();
+    assert_eq!(start_with_parent_json["params"]["parent"], "w1:p1");
+    assert_eq!(
+        serde_json::from_value::<Request>(start_with_parent_json).unwrap(),
+        start_with_parent
     );
 
     let prompt = Request {
@@ -149,6 +169,42 @@ fn agent_start_and_prompt_requests_round_trip() {
     assert_eq!(
         serde_json::from_value::<Request>(prompt_and_wait_json).unwrap(),
         prompt_and_wait
+    );
+}
+
+#[test]
+fn agent_start_parent_is_optional_and_omitted_when_none() {
+    let without_parent = AgentStartParams {
+        name: "reviewer".into(),
+        kind: "pi".into(),
+        pane_id: "w1:p2".into(),
+        args: Vec::new(),
+        timeout_ms: None,
+        parent: None,
+    };
+    let json = serde_json::to_value(&without_parent).unwrap();
+    assert!(json.get("parent").is_none());
+    let parsed: AgentStartParams = serde_json::from_value(serde_json::json!({
+        "name": "reviewer",
+        "kind": "pi",
+        "pane_id": "w1:p2"
+    }))
+    .unwrap();
+    assert_eq!(parsed.parent, None);
+
+    let with_parent = AgentStartParams {
+        name: "reviewer".into(),
+        kind: "pi".into(),
+        pane_id: "w1:p2".into(),
+        args: Vec::new(),
+        timeout_ms: None,
+        parent: Some("w1:p1".into()),
+    };
+    let json = serde_json::to_value(&with_parent).unwrap();
+    assert_eq!(json["parent"], "w1:p1");
+    assert_eq!(
+        serde_json::from_value::<AgentStartParams>(json).unwrap(),
+        with_parent
     );
 }
 

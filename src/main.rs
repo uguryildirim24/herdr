@@ -405,6 +405,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Resume supported AI-agent panes into their native conversation sessions after
 # a Herdr server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
+# Metadata token keys restored from a cold session snapshot. Live handoff
+# restores every non-TTL token.
+# restore_tokens = ["parent", "lane", "round", "branch"]
 
 [remote]
 # Whether herdr manages the ssh config used for `herdr --remote`.
@@ -559,7 +562,11 @@ fn main() -> io::Result<()> {
             )
         })
     {
-        eprintln!("error: --remote can only be used with the default launch command");
+        if remote::is_server_restart_command(&args) {
+            eprintln!("error: server restart is local-only");
+        } else {
+            eprintln!("error: --remote can only be used with the default launch command");
+        }
         eprintln!("run 'herdr --help' for usage");
         std::process::exit(2);
     }
@@ -626,6 +633,7 @@ fn main() -> io::Result<()> {
         println!("       herdr channel set <stable|preview>");
         println!("       herdr machine <subcommand> ...");
         println!("       herdr server stop");
+        println!("       herdr server restart [--exec PATH] [--force]");
         println!("       herdr server reload-config");
         println!("       herdr api <subcommand> ...");
         println!("       herdr completion <shell>");

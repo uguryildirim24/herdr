@@ -849,3 +849,341 @@ fn agent_set_parent_resolves_a_name_that_looks_like_a_pane_id() {
 
     cleanup_test_base(&base);
 }
+
+#[test]
+fn agent_set_parent_surfaces_parent_cycle() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut resolve_stream, _) = accept_fake_cli_operation(&listener);
+        resolve_stream
+            .write_all(
+                br#"{"id":"cli:agent:set-parent","result":{"agent":{"pane_id":"w1:p2","terminal_id":"t1"}}}"#,
+            )
+            .unwrap();
+        resolve_stream.write_all(b"\n").unwrap();
+        resolve_stream.flush().unwrap();
+
+        let (mut stream, _) = accept_fake_cli_operation(&listener);
+        stream
+            .write_all(
+                br#"{"id":"cli:agent:set-parent","error":{"code":"parent_cycle","message":"parent would make this pane its own ancestor"}}"#,
+            )
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+    });
+
+    let run = run_cli(&socket_path, &["agent", "set-parent", "w1:p2", "w1:p1"]);
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(error["error"]["code"], "parent_cycle");
+    assert_eq!(
+        error["error"]["message"],
+        "parent would make this pane its own ancestor"
+    );
+    server.join().unwrap();
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_start_sends_parent_and_surfaces_parent_cycle() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut pane_stream, pane_line) = accept_fake_cli_operation(&listener);
+        let pane: serde_json::Value = serde_json::from_str(&pane_line).unwrap();
+        assert_eq!(pane["method"], "pane.get");
+        writeln!(
+            pane_stream,
+            "{}",
+            serde_json::json!({
+                "id": pane["id"],
+                "result": {
+                    "type": "pane_info",
+                    "pane": { "terminal_id": "term_1" }
+                }
+            })
+        )
+        .unwrap();
+        pane_stream.flush().unwrap();
+
+        let (mut start_stream, start_line) = accept_fake_cli_operation(&listener);
+        let start: serde_json::Value = serde_json::from_str(&start_line).unwrap();
+        assert_eq!(start["method"], "agent.start");
+        assert_eq!(start["params"]["parent"], "w1:p1");
+        writeln!(
+            start_stream,
+            "{}",
+            serde_json::json!({
+                "id": start["id"],
+                "error": {
+                    "code": "parent_cycle",
+                    "message": "parent would make this pane its own ancestor"
+                }
+            })
+        )
+        .unwrap();
+        start_stream.flush().unwrap();
+        start
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            "w1:p2",
+            "--parent",
+            "w1:p1",
+            "--timeout",
+            "4000",
+        ],
+    );
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(error["error"]["code"], "parent_cycle");
+    let start = server.join().unwrap();
+    assert_eq!(start["params"]["parent"], "w1:p1");
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_start_skips_parent_fallback_when_start_response_has_parent() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut pane_stream, pane_line) = accept_fake_cli_operation(&listener);
+        let pane: serde_json::Value = serde_json::from_str(&pane_line).unwrap();
+        writeln!(
+            pane_stream,
+            "{}",
+            serde_json::json!({
+                "id": pane["id"],
+                "result": {
+                    "type": "pane_info",
+                    "pane": { "terminal_id": "term_1" }
+                }
+            })
+        )
+        .unwrap();
+        pane_stream.flush().unwrap();
+
+        let (mut start_stream, start_line) = accept_fake_cli_operation(&listener);
+        let start: serde_json::Value = serde_json::from_str(&start_line).unwrap();
+        assert_eq!(start["params"]["parent"], "w1:p1");
+        writeln!(
+            start_stream,
+            "{}",
+            serde_json::json!({
+                "id": start["id"],
+                "result": {
+                    "type": "agent_started",
+                    "agent": {
+                        "pane_id": "w1:p2",
+                        "terminal_id": "term_1",
+                        "name": "worker",
+                        "tokens": { "parent": "w1:p1" }
+                    },
+                    "argv": ["pi"]
+                }
+            })
+        )
+        .unwrap();
+        start_stream.flush().unwrap();
+
+        let (mut get_stream, get_line) = accept_fake_cli_operation(&listener);
+        let get: serde_json::Value = serde_json::from_str(&get_line).unwrap();
+        assert_eq!(get["method"], "agent.get");
+        writeln!(
+            get_stream,
+            "{}",
+            serde_json::json!({
+                "id": get["id"],
+                "result": {
+                    "type": "agent_info",
+                    "agent": {
+                        "agent": "pi",
+                        "agent_status": "idle",
+                        "interactive_ready": true,
+                        "launch_pending": false,
+                        "name": "worker",
+                        "pane_id": "w1:p2",
+                        "terminal_id": "term_1",
+                        "tokens": { "parent": "w1:p1" }
+                    }
+                }
+            })
+        )
+        .unwrap();
+        get_stream.flush().unwrap();
+
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok(_) => panic!("fallback pane.report_metadata should not run"),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept failed: {err}"),
+            }
+        }
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            "w1:p2",
+            "--parent",
+            "w1:p1",
+            "--timeout",
+            "4000",
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&run.stdout)).unwrap();
+    assert_eq!(stdout["result"]["agent"]["tokens"]["parent"], "w1:p1");
+    server.join().unwrap();
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_start_fallback_surfaces_parent_cycle() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut pane_stream, pane_line) = accept_fake_cli_operation(&listener);
+        let pane: serde_json::Value = serde_json::from_str(&pane_line).unwrap();
+        writeln!(
+            pane_stream,
+            "{}",
+            serde_json::json!({
+                "id": pane["id"],
+                "result": {
+                    "type": "pane_info",
+                    "pane": { "terminal_id": "term_1" }
+                }
+            })
+        )
+        .unwrap();
+        pane_stream.flush().unwrap();
+
+        let (mut start_stream, start_line) = accept_fake_cli_operation(&listener);
+        let start: serde_json::Value = serde_json::from_str(&start_line).unwrap();
+        assert_eq!(start["params"]["parent"], "w1:p1");
+        writeln!(
+            start_stream,
+            "{}",
+            serde_json::json!({
+                "id": start["id"],
+                "result": {
+                    "type": "agent_started",
+                    "agent": {
+                        "pane_id": "w1:p2",
+                        "terminal_id": "term_1",
+                        "name": "worker"
+                    },
+                    "argv": ["pi"]
+                }
+            })
+        )
+        .unwrap();
+        start_stream.flush().unwrap();
+
+        let (mut get_stream, get_line) = accept_fake_cli_operation(&listener);
+        let get: serde_json::Value = serde_json::from_str(&get_line).unwrap();
+        writeln!(
+            get_stream,
+            "{}",
+            serde_json::json!({
+                "id": get["id"],
+                "result": {
+                    "type": "agent_info",
+                    "agent": {
+                        "agent": "pi",
+                        "agent_status": "idle",
+                        "interactive_ready": true,
+                        "launch_pending": false,
+                        "name": "worker",
+                        "pane_id": "w1:p2",
+                        "terminal_id": "term_1"
+                    }
+                }
+            })
+        )
+        .unwrap();
+        get_stream.flush().unwrap();
+
+        let (mut report_stream, report_line) = accept_fake_cli_operation(&listener);
+        let report: serde_json::Value = serde_json::from_str(&report_line).unwrap();
+        assert_eq!(report["method"], "pane.report_metadata");
+        assert_eq!(report["params"]["tokens"]["parent"], "w1:p1");
+        writeln!(
+            report_stream,
+            "{}",
+            serde_json::json!({
+                "id": report["id"],
+                "error": {
+                    "code": "parent_cycle",
+                    "message": "parent would make this pane its own ancestor"
+                }
+            })
+        )
+        .unwrap();
+        report_stream.flush().unwrap();
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            "w1:p2",
+            "--parent",
+            "w1:p1",
+            "--timeout",
+            "4000",
+        ],
+    );
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(error["error"]["code"], "parent_cycle");
+    assert_ne!(error["error"]["code"], "agent_parent_report_failed");
+    server.join().unwrap();
+    cleanup_test_base(&base);
+}

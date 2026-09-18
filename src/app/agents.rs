@@ -189,18 +189,6 @@ impl App {
         if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
             return Err(AgentStartError::TargetBusy(params.pane_id));
         }
-        let runtime = self
-            .terminal_runtimes
-            .get(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-        let shell_name = available_shell_name(runtime)
-            .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
-
-        let mut argv = vec![executable.to_string()];
-        argv.extend(params.args);
-        let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-            .ok_or(AgentStartError::InvalidArgument)?;
-        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -210,7 +198,59 @@ impl App {
             return Err(AgentStartError::InvalidTimeout);
         }
 
+        // Apply parent through the metadata gate before encoding or typing so a
+        // cyclic parent returns parent_cycle and launches nothing, even when
+        // the pane has no live runtime yet.
+        if let Some(parent) = params.parent {
+            let report = self.handle_api_request_after_internal_events_drained(
+                crate::api::schema::Request {
+                    id: "agent-start-parent".into(),
+                    method: crate::api::schema::Method::PaneReportMetadata(
+                        crate::api::schema::PaneReportMetadataParams {
+                            pane_id: params.pane_id.clone(),
+                            source: "herdr:agent-start".into(),
+                            agent: None,
+                            applies_to_source: None,
+                            title: None,
+                            display_agent: None,
+                            state_labels: std::collections::HashMap::new(),
+                            tokens: std::collections::HashMap::from([(
+                                super::agent_parents::PARENT_TOKEN.to_string(),
+                                Some(parent),
+                            )]),
+                            clear_title: false,
+                            clear_display_agent: false,
+                            clear_state_labels: false,
+                            seq: None,
+                            ttl_ms: None,
+                        },
+                    ),
+                },
+            );
+            if let Some(error) = metadata_report_error(&report) {
+                return Err(AgentStartError::Metadata(error));
+            }
+        }
+
+        let mut argv = vec![executable.to_string()];
+        argv.extend(params.args.clone());
+        let bytes = {
+            let runtime = self
+                .terminal_runtimes
+                .get(&terminal_id)
+                .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+            let shell_name = available_shell_name(runtime)
+                .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+            let command = crate::platform::interactive_shell_command(&argv, &shell_name)
+                .ok_or(AgentStartError::InvalidArgument)?;
+            crate::app::api_helpers::encode_api_submission(runtime, &command)
+        };
+
         let now = Instant::now();
+        let runtime = self
+            .terminal_runtimes
+            .get(&terminal_id)
+            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         let terminal = self
             .state
             .terminals
@@ -221,6 +261,7 @@ impl App {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
+        terminal.managed_agent_args = params.args;
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
         }
@@ -270,6 +311,7 @@ impl App {
                 code: "agent_start_input_failed".into(),
                 message,
             },
+            AgentStartError::Metadata(error) => error,
             AgentStartError::DuplicateName { name, candidates } => crate::api::schema::ErrorBody {
                 code: "agent_name_taken".into(),
                 message: format!(
@@ -417,6 +459,19 @@ impl App {
     }
 }
 
+fn metadata_report_error(response: &str) -> Option<crate::api::schema::ErrorBody> {
+    let value: serde_json::Value = serde_json::from_str(response).ok()?;
+    let error = value.get("error")?;
+    Some(crate::api::schema::ErrorBody {
+        code: error.get("code")?.as_str()?.to_string(),
+        message: error
+            .get("message")
+            .and_then(|message| message.as_str())
+            .unwrap_or("parent metadata was rejected")
+            .to_string(),
+    })
+}
+
 fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
     #[cfg(test)]
     if runtime.child_pid().is_none() {
@@ -456,6 +511,7 @@ pub(super) enum AgentStartError {
     TargetBusy(String),
     TargetUnavailable(String),
     InputFailed(String),
+    Metadata(crate::api::schema::ErrorBody),
     DuplicateName {
         name: String,
         candidates: Vec<crate::api::schema::AgentInfo>,
@@ -476,6 +532,12 @@ pub(super) enum AgentRenameError {
 #[cfg(test)]
 mod tests {
     use super::valid_agent_name;
+    use super::App;
+    use crate::api::schema::AgentStartParams;
+    use crate::app::agent_parents::PARENT_TOKEN;
+    use crate::config::Config;
+    use crate::detect::{Agent, AgentState};
+    use crate::workspace::Workspace;
 
     #[test]
     fn agent_names_use_a_small_cli_safe_grammar() {
@@ -494,5 +556,96 @@ mod tests {
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
         }
+    }
+
+    fn start_app() -> (App, crate::layout::PaneId, String, String) {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("coord"), Workspace::test_new("lane")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let parent_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let parent_public = app.public_pane_id(0, parent_pane).unwrap();
+        let parent_terminal_id = app.state.workspaces[0]
+            .terminal_id(parent_pane)
+            .unwrap()
+            .clone();
+        let parent = app.state.terminals.get_mut(&parent_terminal_id).unwrap();
+        parent.set_agent_name("coordinator".into());
+        parent.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        let child_pane = app.state.workspaces[1].tabs[0].root_pane;
+        let child_public = app.public_pane_id(1, child_pane).unwrap();
+        (app, child_pane, child_public, parent_public)
+    }
+
+    #[tokio::test]
+    async fn start_agent_applies_parent_before_typing() {
+        let (mut app, child_pane, child_public, parent_public) = start_app();
+        let terminal_id = app.state.workspaces[1]
+            .terminal_id(child_pane)
+            .unwrap()
+            .clone();
+        let (runtime, mut receiver) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+        runtime
+            .try_send_bytes(bytes::Bytes::from_static(b"occupied"))
+            .unwrap();
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+
+        let args = vec!["--force".into(), "--model".into(), "m".into()];
+        let err = match app.start_agent(AgentStartParams {
+            name: "lane-a".into(),
+            kind: "cursor".into(),
+            pane_id: child_public.clone(),
+            args: args.clone(),
+            timeout_ms: Some(4_000),
+            parent: Some(parent_public.clone()),
+        }) {
+            Err(err) => err,
+            Ok(_) => panic!("full channel should fail the typed start"),
+        };
+        assert!(matches!(err, super::AgentStartError::InputFailed(_)));
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .metadata_tokens
+                .get(PARENT_TOKEN),
+            Some(parent_public.as_str())
+        );
+        assert!(app.state.terminals[&terminal_id]
+            .managed_agent_args
+            .is_empty());
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"occupied")
+        );
+        assert!(receiver.try_recv().is_err());
+
+        let started = match app.start_agent(AgentStartParams {
+            name: "lane-a".into(),
+            kind: "cursor".into(),
+            pane_id: child_public,
+            args: args.clone(),
+            timeout_ms: Some(4_000),
+            parent: Some(parent_public.clone()),
+        }) {
+            Ok(started) => started,
+            Err(_) => panic!("retry after draining the channel"),
+        };
+        assert_eq!(started.0.name.as_deref(), Some("lane-a"));
+        assert_eq!(app.state.terminals[&terminal_id].managed_agent_args, args);
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .metadata_tokens
+                .get(PARENT_TOKEN),
+            Some(parent_public.as_str())
+        );
+        assert!(!receiver.try_recv().unwrap().is_empty());
     }
 }

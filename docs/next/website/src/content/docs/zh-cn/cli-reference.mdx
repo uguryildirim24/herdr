@@ -118,13 +118,14 @@ compinit
 ```bash
 herdr server
 herdr server stop
+herdr server restart [--exec PATH] [--force]
 herdr server reload-config
 herdr server agent-manifests [--json]
 herdr server update-agent-manifests [--json]
 herdr server reload-agent-manifests
 ```
 
-`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示生效的智能体检测清单来源、缓存的远程版本和最近的远程更新结果。`update-agent-manifests` 立即拉取远程清单更新,重载到运行中的服务器,并打印更新后的清单状态;要原始状态响应就加 `--json`。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。
+`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`herdr server restart` 替换正在运行的本地服务器并保留窗格进程。它只用于 Unix 本地会话；`--remote` 和 `--machine` 会拒绝。`--exec` 必须是绝对路径上可执行的 Herdr 二进制。`--force` 可覆盖挂起的智能体启动/恢复和配置加载错误，但不会跳过 `--exec` 检查。`herdr server live-handoff` 仍作为旧 CLI 的隐藏别名保留。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示生效的智能体检测清单来源、缓存的远程版本和最近的远程更新结果。`update-agent-manifests` 立即拉取远程清单更新,重载到运行中的服务器,并打印更新后的清单状态;要原始状态响应就加 `--json`。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。第一次从 0.9.0 跳转、以及重启后保留什么，见[会话状态与恢复](/docs/session-state/)。
 
 ## 通知
 
@@ -303,6 +304,8 @@ herdr pane report-metadata <pane_id> \
 
 `--source` 和 `--applies-to-source` 必须不超过 80 个字符,并且只能包含 ASCII 字母、数字、冒号、点、下划线和连字符。`--ttl-ms` 让元数据自动过期,取值必须在 `1` 到 `86400000` 毫秒之间。想让元数据一直保留到被替换、清除或窗格或工作区关闭时,省略它。`--seq` 让 Herdr 忽略来自同一 `--source` 的过期上报;过期上报会被 API 接受,但被窗格状态忽略。每个窗格或工作区在其生命周期内最多接受来自 32 个不同来源的带序号令牌上报,清除或过期不会释放这些来源名额。
 
+`parent` 令牌命名另一个窗格。如果该值会让窗格成为自己的祖先，Herdr 拒绝写入并返回 `parent_cycle`，消息为 `parent would make this pane its own ancestor`。现有令牌不变。`parent` 不能使用 `--ttl-ms`；该调用返回 `invalid_metadata_token`。`--clear-token parent` 仍然允许。
+
 ## 智能体
 
 窗格与智能体的模型和完整协调示例见[智能体自动化](/zh-cn/docs/agent-automation/)。
@@ -325,7 +328,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 智能体目标只能是唯一的实时智能体名称,或当前承载该智能体的窗格 ID。终端 ID 和单独的智能体 kind 标签不能作为目标。通过 `agent start` 启动的智能体必须有名称;手动启动的智能体保持未命名,通过窗格 ID 寻址。
 
-`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`letta`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。 Pass `--parent PANE_ID` to assign a parent pane token upon startup. After a successful start, Herdr reports `parent=PANE_ID` on the started pane. When `[experimental] agent_parent_nesting = true` is enabled, the agent nests under that parent pane in the sidebar Agents panel.
+`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`letta`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。传入 `--parent PANE_ID` 可在启动时设置父窗格令牌。CLI 把该窗格 ID 作为 `agent.start` 上的可选 `parent` 字段发送。识别该字段的服务器会在启动前应用它。循环父级返回 `parent_cycle` 且不会启动。忽略该字段的旧服务器仍会走启动后的 `pane.report_metadata` 回退。两条路径上的 `parent_cycle` 都是退出码 1，并在 stderr 上输出 JSON 错误。启用 `[experimental] agent_parent_nesting = true` 时，智能体会嵌套在侧边栏 Agents 面板中该父窗格之下。
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
@@ -333,7 +336,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 `idle` 和 `done` 都表示可以接受输入。CLI/API 使用服务器的已查看状态：`done` 表示尚未标记为已查看的 idle；显式 `pane focus` / `agent focus` 会标记目标，读取不会。每个 TUI 客户端独立记录它已显示的完成状态，因此其 Done 标记可能与 CLI 或其他客户端不同。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
-`agent send-keys` 发送 `enter`、`up`、`esc`、`ctrl+c` 等逻辑按键。Herdr 会在写入任何字节前验证所有按键。`agent read` 读取解析出的终端流,`agent rename` 为已检测到的智能体命名。`agent set-parent <agent|pane_id> <parent_pane_id>|--clear` sets or clears the `parent` metadata token on an agent or pane target.
+`agent send-keys` 发送 `enter`、`up`、`esc`、`ctrl+c` 等逻辑按键。Herdr 会在写入任何字节前验证所有按键。`agent read` 读取解析出的终端流,`agent rename` 为已检测到的智能体命名。`agent set-parent <agent|pane_id> <parent_pane_id>|--clear` 设置或清除智能体或窗格目标上的 `parent` 元数据令牌。循环父级返回 `parent_cycle`，退出码 1，并在 stderr 上输出 JSON。
 
 `agent explain` 请求运行中的服务器对屏幕检测所用的同一份底部缓冲区检测快照进行分类,因此实时输出反映服务器生效的清单缓存。因为它使用 `agent.explain` socket 方法,升级 Herdr 后,请先重启或交接到更新后的服务器,再使用实时 explain。用 `--file PATH --agent LABEL` 可以改为在本地解释一份保存的样本。默认输出显示智能体、最终状态、清单来源和版本、匹配的规则及其区域证据,以及任何回退、跳过或警告原因。加 `--verbose` 可以看到可见证据标志、缓存的远程版本、本地覆盖的遮蔽情况、远程更新状态,以及带匹配器和区域证据的完整已评估规则列表。提交问题报告或写测试时加 `--json`。
 

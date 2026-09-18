@@ -7,6 +7,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
 
     match subcommand {
         "stop" => server_stop(&args[1..]).map(Some),
+        "restart" => server_restart(&args[1..]).map(Some),
         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
         "--handoff-import" => Ok(None),
         "reload-config" => server_reload_config(&args[1..]).map(Some),
@@ -197,6 +198,265 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
     }
 }
 
+fn server_restart(args: &[String]) -> std::io::Result<i32> {
+    let parsed = match parse_restart_args(args) {
+        Ok(parsed) => parsed,
+        Err(code) => return Ok(code),
+    };
+
+    if !parsed.force {
+        if let Some(message) = config_preflight_error() {
+            eprintln!("restart refused: {message} (pass --force to override)");
+            return Ok(1);
+        }
+    }
+
+    let import_exe = match parsed.exec {
+        Some(exec) => match prepare_restart_exec(&exec) {
+            Ok(path) => Some(path),
+            Err(message) => {
+                return super::print_response(&cli_json_error(
+                    "cli:server:restart",
+                    "invalid_exec",
+                    message,
+                ));
+            }
+        },
+        None => {
+            print_restart_version_line(std::env::current_exe().ok().as_deref());
+            None
+        }
+    };
+
+    let mut params = ServerLiveHandoffParams {
+        force: parsed.force,
+        ..ServerLiveHandoffParams::default()
+    };
+    if let Some(import_exe) = import_exe {
+        params.import_exe = Some(import_exe.to_string_lossy().into_owned());
+    }
+
+    let response = super::send_request_unchecked(&Request {
+        id: "cli:server:restart".into(),
+        method: Method::ServerLiveHandoff(params),
+    })?;
+    if response.get("error").is_some() {
+        return super::print_response(&response);
+    }
+
+    eprintln!(
+        "server restart complete; server log: {}",
+        crate::session::data_dir()
+            .join("herdr-server.log")
+            .display()
+    );
+    Ok(0)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RestartArgs {
+    exec: Option<String>,
+    force: bool,
+}
+
+fn parse_restart_args(args: &[String]) -> Result<RestartArgs, i32> {
+    let mut exec = None;
+    let mut force = false;
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = &args[idx];
+        match arg.as_str() {
+            "help" | "--help" | "-h" => {
+                eprintln!("usage: herdr server restart [--exec <path>] [--force]");
+                return Err(0);
+            }
+            "--force" => {
+                force = true;
+                idx += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let (flag, value) = if let Some((flag, value)) = arg.split_once('=') {
+            (flag, Some(value.to_string()))
+        } else {
+            let value = args.get(idx + 1).cloned();
+            idx += 1;
+            (arg.as_str(), value)
+        };
+        let Some(value) = value else {
+            eprintln!("usage: herdr server restart [--exec <path>] [--force]");
+            return Err(2);
+        };
+        match flag {
+            "--exec" => exec = Some(value),
+            _ => {
+                eprintln!("usage: herdr server restart [--exec <path>] [--force]");
+                return Err(2);
+            }
+        }
+        idx += 1;
+    }
+    Ok(RestartArgs { exec, force })
+}
+
+fn config_preflight_error() -> Option<String> {
+    let errors = crate::config::Config::load()
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.starts_with("config read error")
+                || diagnostic.starts_with("config parse error")
+        })
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    }
+}
+
+fn prepare_restart_exec(path: &str) -> Result<std::path::PathBuf, String> {
+    let canonical = validate_restart_exec(path)?;
+    if let Some(path_herdr) = path_herdr() {
+        let path_canonical = path_herdr.canonicalize().unwrap_or(path_herdr.clone());
+        if path_canonical != canonical {
+            eprintln!(
+                "warning: --exec {} is not the herdr on PATH ({})",
+                canonical.display(),
+                path_herdr.display()
+            );
+        }
+    }
+    let new_version = herdr_version_output(&canonical)?;
+    eprintln!(
+        "herdr {} → herdr {new_version}",
+        crate::build_info::version()
+    );
+    Ok(canonical)
+}
+
+fn print_restart_version_line(exe: Option<&std::path::Path>) {
+    let Some(exe) = exe else {
+        return;
+    };
+    if let Ok(new_version) = herdr_version_output(exe) {
+        eprintln!(
+            "herdr {} → herdr {new_version}",
+            crate::build_info::version()
+        );
+    }
+}
+
+fn validate_restart_exec(path: &str) -> Result<std::path::PathBuf, String> {
+    let raw = std::path::PathBuf::from(path);
+    if !raw.is_absolute() {
+        return Err(format!("--exec must be an absolute path: {path}"));
+    }
+    let canonical = raw
+        .canonicalize()
+        .map_err(|err| format!("--exec is not a usable file: {path}: {err}"))?;
+    if !canonical.is_absolute() {
+        return Err(format!(
+            "--exec must resolve to an absolute path: {}",
+            canonical.display()
+        ));
+    }
+    let metadata = canonical.metadata().map_err(|err| {
+        format!(
+            "--exec is not a usable file: {}: {err}",
+            canonical.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "--exec is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(format!("--exec is not executable: {}", canonical.display()));
+        }
+    }
+    Ok(canonical)
+}
+
+fn path_herdr() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    const HERDR_NAME: &str = "herdr.exe";
+    #[cfg(not(windows))]
+    const HERDR_NAME: &str = "herdr";
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(HERDR_NAME))
+        .find(|candidate| candidate.is_file())
+}
+
+fn herdr_version_output(exe: &std::path::Path) -> Result<String, String> {
+    let mut child = std::process::Command::new(exe)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to run {} --version: {err}", exe.display()))?;
+    let stdout = child.stdout.take();
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= std::time::Duration::from_secs(5) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{} --version timed out", exe.display()));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(err) => {
+                return Err(format!(
+                    "failed to wait for {} --version: {err}",
+                    exe.display()
+                ));
+            }
+        }
+    };
+    let mut buf = String::new();
+    if let Some(mut out) = stdout {
+        use std::io::Read;
+        let _ = out.read_to_string(&mut buf);
+    }
+    if !status.success() {
+        return Err(format!(
+            "{} --version exited {}",
+            exe.display(),
+            status.code().unwrap_or(1)
+        ));
+    }
+    let first = buf.lines().next().unwrap_or("").trim();
+    let Some(version) = first.strip_prefix("herdr ") else {
+        return Err(format!(
+            "--exec --version must start with 'herdr ': {first}"
+        ));
+    };
+    if version.is_empty() {
+        return Err(format!(
+            "--exec --version must start with 'herdr ': {first}"
+        ));
+    }
+    Ok(version.to_string())
+}
+
+fn cli_json_error(id: &str, code: &str, message: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message.into(),
+        }
+    })
+}
+
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_live_handoff_params(args) else {
         eprintln!(
@@ -260,7 +520,9 @@ fn print_server_help() {
     eprintln!("herdr server commands:");
     eprintln!("  herdr server                run as headless server");
     eprintln!("  herdr server stop           stop the running server via the API socket");
-    eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
+    eprintln!(
+        "  herdr server restart        replace the running local server and keep pane processes"
+    );
     eprintln!("  herdr server reload-config  reload config.toml in the running server");
     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");
     eprintln!("  herdr server update-agent-manifests [--json]  fetch and reload agent detection manifests");
@@ -367,5 +629,51 @@ mod tests {
         );
         assert_eq!(params.expected_protocol, Some(9));
         assert_eq!(params.expected_version.as_deref(), Some("0.6.2"));
+        assert!(!params.force);
+    }
+
+    #[test]
+    fn restart_args_parse_exec_and_force() {
+        let args = vec![
+            "--exec".to_string(),
+            "/tmp/herdr".to_string(),
+            "--force".to_string(),
+        ];
+        let parsed = parse_restart_args(&args).expect("params");
+        assert_eq!(parsed.exec.as_deref(), Some("/tmp/herdr"));
+        assert!(parsed.force);
+    }
+
+    #[test]
+    fn restart_args_parse_equals_exec_without_expected_fields() {
+        let parsed = parse_restart_args(&["--exec=/opt/herdr".to_string()]).expect("params");
+        assert_eq!(parsed.exec.as_deref(), Some("/opt/herdr"));
+        assert!(!parsed.force);
+    }
+
+    #[test]
+    fn restart_args_reject_unknown_flags() {
+        assert_eq!(
+            parse_restart_args(&["--expected-protocol".to_string(), "22".to_string()]),
+            Err(2)
+        );
+    }
+
+    #[test]
+    fn validate_restart_exec_rejects_relative_and_missing_paths() {
+        assert!(validate_restart_exec("relative/herdr")
+            .unwrap_err()
+            .contains("absolute path"));
+        assert!(validate_restart_exec("/nonexistent/herdr-missing")
+            .unwrap_err()
+            .contains("not a usable file"));
+    }
+
+    #[test]
+    fn cli_json_error_uses_invalid_exec_code() {
+        assert_eq!(
+            cli_json_error("cli:server:restart", "invalid_exec", "missing")["error"]["code"],
+            "invalid_exec"
+        );
     }
 }

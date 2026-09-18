@@ -521,7 +521,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: Pane metadata tokens do not survive a server restart. Herdr does not save them with the session, so the `parent` token is empty after a restart and the Agents panel shows every agent at the top level. Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
+**Server restart and persistence**: A live `herdr server restart` keeps every pane and workspace metadata token that has no TTL, including `parent`. A cold stop then start restores only the keys in `[session] restore_tokens` (default `parent`, `lane`, `round`, `branch`). The first bounce from a running 0.9.0 server still drops tokens, because 0.9.0 does not capture them; re-link once with `herdr agent set-parent`.
 
 ## Notifications
 
@@ -598,9 +598,10 @@ Herdr resumes supported Agent conversations after a server restart by default:
 ```toml
 [session]
 resume_agents_on_restore = true
+restore_tokens = ["parent", "lane", "round", "branch"]
 ```
 
-Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
+Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. After a cold restart, Herdr restores only the metadata token keys in `restore_tokens`. A live handoff restores every token that has no TTL. Status tokens such as `done` and `waiting` are not restored after a cold stop unless you add them to this list. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
 
 ## IME cursor tracking
 

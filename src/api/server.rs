@@ -36,6 +36,7 @@ pub struct ServerHandle {
     path: PathBuf,
     identity: SocketFileIdentity,
     running: Arc<AtomicBool>,
+    handed_off: Arc<AtomicBool>,
 }
 
 impl Drop for ServerHandle {
@@ -53,6 +54,11 @@ impl Drop for ServerHandle {
 impl ServerHandle {
     pub(crate) fn remove_socket_file_if_owned(&self) -> std::io::Result<()> {
         remove_socket_file_if_owned(&self.path, &self.identity)
+    }
+
+    pub(crate) fn mark_handed_off(&self) {
+        self.handed_off.store(true, Ordering::Release);
+        self.running.store(false, Ordering::Release);
     }
 }
 
@@ -89,7 +95,9 @@ fn start_server_inner(
     info!(path = %path.display(), "api server listening");
 
     let running = Arc::new(AtomicBool::new(true));
+    let handed_off = Arc::new(AtomicBool::new(false));
     let listener_running = Arc::clone(&running);
+    let listener_handed_off = Arc::clone(&handed_off);
     let thread = std::thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
@@ -99,6 +107,7 @@ fn start_server_inner(
                     let capabilities = capabilities.clone();
                     let server_stop = server_stop.clone();
                     let connection_running = Arc::clone(&listener_running);
+                    let connection_handed_off = Arc::clone(&listener_handed_off);
                     std::thread::spawn(move || {
                         if let Err(err) = handle_connection_with_stop(
                             stream,
@@ -107,6 +116,7 @@ fn start_server_inner(
                             &connection_running,
                             capabilities,
                             server_stop.as_ref(),
+                            &connection_handed_off,
                         ) {
                             warn!(err = %err, "api connection failed");
                         }
@@ -126,6 +136,7 @@ fn start_server_inner(
         path,
         identity,
         running,
+        handed_off,
     })
 }
 
@@ -150,7 +161,15 @@ fn handle_connection(
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
 ) -> std::io::Result<()> {
-    handle_connection_with_stop(stream, api_tx, event_hub, running, capabilities, None)
+    handle_connection_with_stop(
+        stream,
+        api_tx,
+        event_hub,
+        running,
+        capabilities,
+        None,
+        &Arc::new(AtomicBool::new(false)),
+    )
 }
 
 fn handle_connection_with_stop(
@@ -160,6 +179,7 @@ fn handle_connection_with_stop(
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
     server_stop: Option<&Arc<AtomicBool>>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "api connection write timeout unavailable");
@@ -243,6 +263,7 @@ fn handle_connection_with_stop(
                 api_tx,
                 event_hub,
                 running,
+                handed_off,
             )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
@@ -254,6 +275,7 @@ fn handle_connection_with_stop(
                 api_tx,
                 event_hub,
                 running,
+                handed_off,
             )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
@@ -265,12 +287,19 @@ fn handle_connection_with_stop(
                 api_tx,
                 event_hub,
                 running,
+                handed_off,
             )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         Method::PaneWaitForOutput(params) => {
-            let response =
-                wait_for_output(request_id.clone(), params, &mut stream, api_tx, running)?;
+            let response = wait_for_output(
+                request_id.clone(),
+                params,
+                &mut stream,
+                api_tx,
+                running,
+                handed_off,
+            )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         method_body => {

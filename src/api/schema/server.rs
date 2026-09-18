@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct PingParams {}
 
+fn skip_if_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerLiveHandoffParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11,6 +15,9 @@ pub struct ServerLiveHandoffParams {
     pub expected_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
+    /// Optional JSON field. Older clients omit it; default is false.
+    #[serde(default, skip_serializing_if = "skip_if_false")]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

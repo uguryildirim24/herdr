@@ -10,7 +10,8 @@ Herdr uses several state paths for different situations.
 | Case | Processes keep running | Layout returns | Recent screen returns | Agent conversation resumes |
 | --- | --- | --- | --- | --- |
 | Detach and reattach | Yes | Yes | Yes, from the live terminal | Yes, because the process never stopped |
-| Server restart | No | Yes | Only with pane screen history | Only with native agent session restore |
+| `herdr server restart` | Yes | Yes | Yes, from the live terminal | Yes, because the process keeps running |
+| Server stop then start | No | Yes | Only with pane screen history | Only with native agent session restore |
 | Update without `--handoff` | Compatible servers keep running; restart-required servers may need stop/restart | Yes after restart | Only with pane screen history | Only with native agent session restore |
 | Update with `--handoff` | Best effort for supported running servers | Yes | Yes, from the live terminal if handoff succeeds | Yes, because the process keeps running if handoff succeeds |
 
@@ -25,6 +26,35 @@ herdr
 ```
 
 This is the strongest persistence path because the original processes never stop.
+
+## `herdr server restart`
+
+`herdr server restart` replaces the running local Unix server and keeps pane processes. It is CLI sugar over the same live-handoff protocol that `herdr update --handoff` uses. It does not download a binary and does not set `expected_version` or `expected_protocol`.
+
+```bash
+herdr server restart
+herdr server restart --exec /absolute/path/to/herdr
+herdr server restart --force
+```
+
+Default restart after a cargo install is an upgrade: the old server spawns the file now at its launch path. Printout looks like `herdr 0.9.0 → herdr 0.9.1` when `--exec` is checked. Use `--exec` only with an absolute, executable Herdr binary. Herdr warns when that path is not the `herdr` on `PATH`. Do not point `--exec` at a cargo `target/` directory that cargo may delete.
+
+`--force` overrides `restart_busy` (a managed agent start or resume still pending) and a config-file load/parse error. It does not skip `--exec` checks.
+
+`herdr --remote … server restart` and `herdr --machine … server restart` refuse with `server restart is local-only`. `herdr server live-handoff` remains as a hidden alias for the old CLI.
+
+After a successful restart, attached TUI clients disconnect. Re-run `herdr` for the same session. Open CLI waits receive `server_handed_off` and retry once against the new server. `herdr server stop` still ends pane processes.
+
+### First bounce from installed 0.9.0
+
+The first ADE bounce from a running 0.9.0 server uses the old CLI's hidden `live-handoff` subcommand. Later bounces on this tree use `herdr server restart`.
+
+1. Confirm no pane is mid-`agent start`. Save pane tokens if you need them after the bounce. `herdr status --json` should show server 0.9.0 and `live_handoff: true`.
+2. Install with `cargo install --path . --locked --root ~/.local`. Cargo replaces `~/.local/bin/herdr` by rename. Do not copy or truncate onto the running file. Confirm `herdr --version` is the new build and `herdr status --json` still shows server 0.9.0.
+3. From the old CLI, run `herdr server live-handoff` with no flags. Do not pass `--expected-protocol` or `--expected-version`. Do not run `herdr update --handoff`.
+4. Pane processes, public ids, and agent names stay. Tokens and armed waits from 0.9.0 do not. Attached 0.9.0 TUIs exit.
+5. Re-link parents with `herdr agent set-parent`. Re-arm waits. Re-run `herdr` for the TUI.
+6. Later installs on this tree use `herdr server restart` with no `--exec` after the same cargo rename install.
 
 ## Snapshot restore
 
@@ -99,7 +129,7 @@ Live handoff is for update and remote attach flows that need to replace a runnin
 
 Unlike snapshot restore, pane history replay, and native agent session restore, handoff tries to keep the current processes alive rather than reconstructing state after the old server stops.
 
-A successful handoff preserves long-lived server-owned session state: pane PTYs and processes, agent identity and durable metadata, and plugin/session state needed by the replacement server. It does not preserve transient coordination across the replacement boundary. In-flight CLI or API requests, waits, subscription streams, client sockets, and pane-to-pane messages may be interrupted; clients should reconnect and retry them.
+A successful handoff preserves long-lived server-owned session state: pane PTYs and processes, agent identity and durable metadata, and plugin/session state needed by the replacement server. Attached TUI clients disconnect and must re-run `herdr`. CLI requests that receive `server_handed_off` retry once against the new server. Subscription streams and pane graphics still drop across the replacement.
 
 Updated Unix servers can send more than 64 panes in one handoff by transferring them in batches. The sending server must already contain this support: an older running server still enforces its 64-pane limit on the first upgrade. That limit may require a normal server restart, which ends pane processes. Batching does not change update installation order or remove other handoff compatibility requirements.
 

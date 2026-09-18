@@ -69,9 +69,18 @@ pub(crate) fn spawn_handoff_import(
 ) -> io::Result<Child> {
     let fallback_exe;
     let exe = if let Some(import_exe) = import_exe {
+        if !import_exe.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "import exe must be an absolute path: {}",
+                    import_exe.display()
+                ),
+            ));
+        }
         import_exe
     } else {
-        fallback_exe = std::env::current_exe().map_err(|err| {
+        fallback_exe = crate::platform::launch_executable().map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("failed to determine herdr executable path: {err}"),
@@ -573,5 +582,17 @@ mod tests {
             serde_json::from_value(value).expect("an older manifest should still load");
 
         assert!(older.api_window_title.is_none());
+    }
+
+    #[test]
+    fn spawn_handoff_import_rejects_a_relative_import_exe() {
+        let err = spawn_handoff_import(
+            Some(Path::new("relative/herdr")),
+            Path::new("/tmp/herdr-handoff-test.sock"),
+            "token",
+        )
+        .expect_err("relative import exe");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("absolute path"));
     }
 }

@@ -122,13 +122,14 @@ compinit
 ```bash
 herdr server
 herdr server stop
+herdr server restart [--exec PATH] [--force]
 herdr server reload-config
 herdr server agent-manifests [--json]
 herdr server update-agent-manifests [--json]
 herdr server reload-agent-manifests
 ```
 
-`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
+`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `herdr server restart` replaces the running local server and keeps pane processes. It is Unix-only and local-only; `--remote` and `--machine` refuse it. `--exec` must be an absolute executable Herdr binary. `--force` overrides a pending agent start/resume and a config load error, not `--exec` checks. `herdr server live-handoff` remains as a hidden alias for older scripts. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits. See [Session state and restore](/docs/session-state/) for the first 0.9.0 bounce and what survives a restart.
 
 ## Notifications
 
@@ -160,6 +161,8 @@ herdr workspace rename <workspace_id> <label>
 herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]
 herdr workspace close <workspace_id> [--group]
 ```
+
+`workspace report-metadata` cannot set or clear a `parent` token. That key is pane-only. The API returns `invalid_metadata_token`.
 
 Create a workspace without stealing focus:
 
@@ -324,6 +327,8 @@ Metadata text is normalized before storage. Herdr trims surrounding whitespace, 
 
 `--source` and `--applies-to-source` must be 80 characters or fewer and may contain only ASCII letters, digits, colon, dot, underscore, and hyphen. `--ttl-ms` makes metadata expire automatically and must be between `1` and `86400000` milliseconds. Omit it for metadata that should stay until replaced, cleared, or the pane closes. `--seq` lets Herdr ignore stale reports from the same `--source`; stale reports are accepted by the API but ignored by pane state. A pane or workspace accepts sequenced token reports from at most 32 distinct sources during its lifetime; clearing or expiry does not release those source slots.
 
+A `parent` token names another pane. Herdr refuses a value that would make the pane its own ancestor and returns `parent_cycle` with message `parent would make this pane its own ancestor`. The existing token stays unchanged. `parent` cannot use `--ttl-ms`; that call returns `invalid_metadata_token`. `--clear-token parent` remains allowed.
+
 ## Agents
 
 For the pane-versus-agent model and complete orchestration examples, see [Agent automation](/docs/agent-automation/).
@@ -346,7 +351,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 Agent targets are either a unique live agent name or the pane ID that currently hosts the agent. Terminal IDs and bare agent-kind labels are not agent targets. Agents started through `agent start` require a name; manually launched agents remain unnamed and use their pane ID.
 
-`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it. Pass `--parent PANE_ID` to assign a parent pane token upon startup. After a successful start, Herdr reports `parent=PANE_ID` on the started pane. When `[experimental] agent_parent_nesting = true` is enabled, the agent nests under that parent pane in the sidebar Agents panel.
+`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it. Pass `--parent PANE_ID` to assign a parent pane token upon startup. The CLI sends that pane id as optional `parent` on `agent.start`. A server that honors the field applies it before launch. A cyclic parent returns `parent_cycle` and does not launch. An older server that ignores the field still gets a post-start `pane.report_metadata` fallback. `parent_cycle` from either path is exit 1 with the JSON error on stderr. When `[experimental] agent_parent_nesting = true` is enabled, the agent nests under that parent pane in the sidebar Agents panel.
 
 A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
 
@@ -354,7 +359,7 @@ A successful start returns only after the expected agent owns the same terminal 
 
 `idle` and `done` both mean ready for input. The CLI/API uses the server's seen state: `done` is idle but not yet marked seen, explicit `pane focus` / `agent focus` commands mark the target seen, and reads do not. Each TUI client tracks viewed completions independently, so its Done badge can differ from the CLI or another client. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently, not that its work succeeded.
 
-`agent send-keys` sends logical terminal keys such as `enter`, `up`, `esc`, or `ctrl+c`. Herdr validates every key before writing any bytes. `agent read` reads the resolved terminal stream, and `agent rename` names an already detected agent. `agent set-parent <agent|pane_id> <parent_pane_id>|--clear` sets or clears the `parent` metadata token on an agent or pane target.
+`agent send-keys` sends logical terminal keys such as `enter`, `up`, `esc`, or `ctrl+c`. Herdr validates every key before writing any bytes. `agent read` reads the resolved terminal stream, and `agent rename` names an already detected agent. `agent set-parent <agent|pane_id> <parent_pane_id>|--clear` sets or clears the `parent` metadata token on an agent or pane target. A cyclic parent returns `parent_cycle` as exit 1 with JSON on stderr.
 
 `agent explain` asks the running server to classify the same bottom-buffer detection snapshot used by screen detection, so live output reflects the server's active manifest cache. Because this uses the `agent.explain` socket method, restart or hand off to an updated server after upgrading Herdr before using live explain. Use `--file PATH --agent LABEL` to explain a saved fixture locally instead. The default output shows the agent, final state, manifest source and version, matched rule with its region evidence, and any fallback, skip, or warning reasons. Add `--verbose` for visible evidence flags, cached remote version, local override shadowing, remote update status, and the full evaluated-rules list with matcher and region evidence. Add `--json` for issue reports or tests.
 
