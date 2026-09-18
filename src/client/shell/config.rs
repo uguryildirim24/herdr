@@ -511,6 +511,26 @@ mod tests {
     }
 
     #[test]
+    fn live_reload_applies_agent_parent_nesting() {
+        let mut shell = ClientShellConfig::from_config(&Config::default());
+        assert!(!shell.agent_parent_nesting);
+
+        let mut next = Config::default();
+        next.experimental.agent_parent_nesting = true;
+        let diagnostics = shell.apply_live_config(&next, &[], &[]);
+        assert!(diagnostics.is_empty());
+        assert!(shell.agent_parent_nesting);
+
+        next.experimental.agent_parent_nesting = false;
+        shell.apply_live_config(&next, &[], &[]);
+        assert!(!shell.agent_parent_nesting);
+
+        next.experimental.agent_parent_nesting = true;
+        shell.apply_live_config(&next, &[], &["experimental".to_owned()]);
+        assert!(!shell.agent_parent_nesting);
+    }
+
+    #[test]
     fn live_reload_applies_tab_bar_padding_and_resizes_surface() {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
         let before = state.surface_size(106, 30);
