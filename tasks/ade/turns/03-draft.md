@@ -1,8 +1,9 @@
 # SPEC-ADE turn 03: dispositions of Pro's attack, and v2 in prose
 
 Lane spec-ade, 2026-09-18. Spec: `tasks/SPEC-ADE.md` v2 on `lane/spec-ade`. Pro's turn:
-`tasks/ade/turns/02-pro.md` on `agent-parent-nesting`. Rolf's addendum (item 17, the
-plain-language layer) arrived mid-turn and is folded in as D17.
+`tasks/ade/turns/02-pro.md` on `agent-parent-nesting`. Rolf's two addenda (item 17, the
+plain-language layer; then its enforcement by the binary) arrived mid-turn and are folded in as
+D17; addendum 2 supersedes addendum 1's rules-file line.
 
 ## Dispositions
 
@@ -21,7 +22,7 @@ plain-language layer) arrived mid-turn and is folded in as D17.
 | D9 | temporary index is not checkout isolation | accepted with change | brief committed before the worktree; three checkout cases; `ha pickup` not `resume`; launch intent before launch; only the ticker launches; no respawn after handoff | §1.2 D9 |
 | D10 | preserve the rule without claiming enforcement | accepted with change | cooperative and bounded; transitions from validated records only; long fences; argv not eval | §1.2 D10 |
 | D11 | change the security claim | accepted with change | best-effort change notification; policy hash on decisions | §1.2 D11 |
-| D12 | "never in git" conflicts with inlining | accepted with change | rules at runtime through `ha skill`; reserved budget; `rules_too_large`; one publishable `## Language` section is the exception (D17) | §1.2 D12, D17 |
+| D12 | "never in git" conflicts with inlining | accepted with change | rules at runtime through `ha skill`; reserved budget; `rules_too_large`; no language rule in it, that is a mechanism (D17) | §1.2 D12, D17 |
 | D13 | limit new ADE guarantees to local | accepted with change | rounds and closing verbs local; `remote_not_admissible` | §1.2 D13 |
 | D14 | one write is not priming proof | accepted with change | attempt-bound receipt via `ha skill`/`ha context`; re-send only with positive evidence; O3 scoped to one Claude case | §2.2 D14 |
 | D15 | qualify each adapter, no blind timed input | accepted with change | matrix marked untested per row; no 512-byte timer; agy re-send needs evidence; Pro needs pro-mcp; dsh `--env` is new code; no eighth kind named | §2.2 D15 |
@@ -80,10 +81,15 @@ every live build is re-linked by script and each coordinator reconciles against 
 before re-arming a wait. Rollback is a live reverse handoff or nothing. No build is adopted, no
 skill is deleted by this spec.
 
-Rolf's addendum adds the layer he reads: every thread, round and term is born with a plain
-sentence; the board shows sentences and picturable questions, never names; the language rule is
-the one publishable section of his rules file and rides every priming line; the plugin keeps a
-glossary and answers `ha explain`.
+Rolf's addenda add the layer he reads, as a mechanism rather than a rule. Two planes: what
+agents say to each other is untouched; what reaches Rolf's eyes cannot pass until a deterministic
+check in the plugin says it is plain. Gate A is a per-kind end-of-turn hook the plugin installs for
+the coordinator role only, so a Claude coordinator's turn does not end while its reply carries a
+name without its sentence. Gate B is every publish path in the plugin, board tokens, notifications
+and `ha ask`, refusing text that fails the same check, which covers the kinds no hook can. `ha ask`
+is the one way to ask him anything: a question and two to four choices he can picture. Every name
+is still born with a plain sentence, the glossary and `ha explain` stay, and an optional translator
+command can help a model pass the check but never replaces it.
 
 ## What I am least sure of
 
@@ -94,8 +100,12 @@ glossary and answers `ha explain`.
 - The representative-topology qualification asks the r2 reviewer to start two `chatgpt` panes on
   a throwaway. If `pro-mcp start` cannot run there, the fallback (`terminal-browser` with
   `HERDR_AGENT=chatgpt`) tests survival, not the composer.
-- D17's `needs-you` check is a question mark and a glossary lookup. That is cooperative; the
-  clarity of the sentence is still the coordinator's.
+- Gate A is asserted for Claude only. Whether Cursor's and Codex's end-of-turn hooks can refuse
+  a turn the way Claude's `Stop` hook does is unverified here and is A2's first task; until then
+  those coordinators are gated only on the board.
+- The check's identifier heuristics (CamelCase, kebab-case with a digit, acronyms) will produce
+  false positives on ordinary words; the glossary and the shipped word list absorb them, and the
+  check's fix text keeps the cost to one correction per term.
 
 ## Left for Pro or Rolf
 
