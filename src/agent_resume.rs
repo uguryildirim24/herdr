@@ -287,7 +287,83 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
 }
 
 fn valid_session_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= MAX_SESSION_ID_LEN && !value.chars().any(char::is_control)
+    !value.is_empty()
+        && value.len() <= MAX_SESSION_ID_LEN
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
+}
+
+/// Drop flags that pick a session so native resume can own the id from the snapshot.
+pub(crate) fn strip_session_picking_args(args: &[String]) -> Vec<String> {
+    const VALUE_FLAGS: &[&str] = &[
+        "--resume",
+        "-r",
+        "-c",
+        "--continue",
+        "--session-id",
+        "--fork-session",
+    ];
+    let mut out = Vec::new();
+    let mut skip_leading_resume = args.first().is_some_and(|arg| arg == "resume");
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        if skip_leading_resume && arg == "resume" {
+            skip_leading_resume = false;
+            continue;
+        }
+        skip_leading_resume = false;
+        if arg.starts_with("--resume=") {
+            continue;
+        }
+        if VALUE_FLAGS.contains(&arg.as_str()) {
+            // Codex uses `-c key=value` for config; keep those pairs.
+            if arg == "-c" && args.peek().is_some_and(|next| next.contains('=')) {
+                out.push(arg.clone());
+                continue;
+            }
+            if args.peek().is_some_and(|next| !next.starts_with('-')) {
+                args.next();
+            }
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
+}
+
+/// Replay stored `agent start` args after the native resume plan argv.
+pub fn plan_with_managed_args(
+    source: &str,
+    agent: &str,
+    session_ref: &AgentSessionRef,
+    managed_args: &[String],
+) -> Option<AgentResumePlan> {
+    let mut plan = plan(source, agent, session_ref)?;
+    if managed_args.is_empty() {
+        return Some(plan);
+    }
+    if agent == "opencode" {
+        tracing::info!(
+            agent,
+            args = ?managed_args,
+            "dropping managed agent args on restore; opencode root TUI has no --model"
+        );
+        return Some(plan);
+    }
+    let args = strip_session_picking_args(managed_args);
+    if args.is_empty() {
+        return Some(plan);
+    }
+    if agent == "codex" {
+        // `codex resume <args> <id>`: options before the positional session id.
+        if let Some(session_id) = plan.argv.pop() {
+            plan.argv.extend(args);
+            plan.argv.push(session_id);
+        }
+    } else {
+        plan.argv.extend(args);
+    }
+    Some(plan)
 }
 
 fn valid_session_path(value: &str) -> bool {
@@ -855,5 +931,87 @@ mod tests {
             &AgentSessionRef::path(&agy_session).unwrap()
         )
         .is_none());
+    }
+
+    #[test]
+    fn valid_session_id_rejects_leading_dash() {
+        assert!(AgentSessionRef::id("ok-session").is_some());
+        assert!(AgentSessionRef::id("-secret").is_none());
+        assert!(session_ref_from_snapshot(
+            "herdr:claude",
+            "claude",
+            AgentSessionRefKind::Id,
+            "-secret"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn strip_session_picking_args_keeps_codex_config_pairs() {
+        assert_eq!(
+            strip_session_picking_args(&[
+                "--resume".into(),
+                "old".into(),
+                "--force".into(),
+                "--model".into(),
+                "m".into(),
+            ]),
+            vec!["--force", "--model", "m"]
+        );
+        assert_eq!(
+            strip_session_picking_args(&["-c".into(), "model=gpt".into(), "--force".into()]),
+            vec!["-c", "model=gpt", "--force"]
+        );
+        assert_eq!(
+            strip_session_picking_args(&["resume".into(), "--force".into()]),
+            vec!["--force"]
+        );
+    }
+
+    #[test]
+    fn plan_with_managed_args_replays_per_kind() {
+        let id = AgentSessionRef::id("sid").unwrap();
+        let args = vec!["--force".into(), "--model".into(), "m".into()];
+        assert_eq!(
+            plan_with_managed_args("herdr:claude", "claude", &id, &args)
+                .unwrap()
+                .argv,
+            vec!["claude", "--resume", "sid", "--force", "--model", "m"]
+        );
+        assert_eq!(
+            plan_with_managed_args("herdr:cursor", "cursor", &id, &args)
+                .unwrap()
+                .argv,
+            vec![
+                if cfg!(windows) {
+                    "cursor-agent.cmd"
+                } else {
+                    "cursor-agent"
+                },
+                "--resume",
+                "sid",
+                "--force",
+                "--model",
+                "m",
+            ]
+        );
+        assert_eq!(
+            plan_with_managed_args("herdr:codex", "codex", &id, &args)
+                .unwrap()
+                .argv,
+            vec!["codex", "resume", "--force", "--model", "m", "sid"]
+        );
+        assert_eq!(
+            plan_with_managed_args("herdr:antigravity_cli", "agy", &id, &args)
+                .unwrap()
+                .argv,
+            vec!["agy", "--conversation", "sid", "--force", "--model", "m"]
+        );
+        assert_eq!(
+            plan_with_managed_args("herdr:opencode", "opencode", &id, &args)
+                .unwrap()
+                .argv,
+            vec!["opencode", "--session", "sid"]
+        );
     }
 }

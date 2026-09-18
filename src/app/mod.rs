@@ -396,6 +396,7 @@ impl App {
                 &config.terminal.default_shell,
                 config.terminal.shell_mode,
                 config.session.resume_agents_on_restore,
+                Some(config.session.restore_tokens.as_slice()),
                 event_tx.clone(),
                 render_notify.clone(),
                 render_dirty.clone(),
@@ -635,6 +636,7 @@ impl App {
         };
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
+        app.reindex_after_restore();
         app
     }
 
@@ -690,6 +692,7 @@ impl App {
                 .get(idx)
                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
         });
+        app.reindex_after_restore();
         Ok(app)
     }
 
@@ -2814,6 +2817,7 @@ mod tests {
                 pane_id,
                 args: Vec::new(),
                 timeout_ms: Some(1_000),
+                parent: None,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -2856,6 +2860,7 @@ mod tests {
                 pane_id: pane_id.clone(),
                 args: vec!["resume".into(), "codex-session".into()],
                 timeout_ms: Some(4_000),
+                parent: None,
             }),
         };
         let response = app.handle_api_request(request());

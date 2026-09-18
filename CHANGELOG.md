@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Cold restore now keeps lane-tree metadata tokens `parent`, `lane`, `round`, and `branch` by default (`[session] restore_tokens`). A live handoff keeps every token that has no TTL. Managed `agent start` args replay on native resume.
 - Experimental agent parent nesting (`[experimental] agent_parent_nesting = true`) allowing child worker agents to nest under their parent orchestrator in the sidebar Agents panel.
 - Collapsible subtrees in the Agents panel with chevron toggle and roll-up status badge for hidden child agents.
 - `--parent <PANE_ID>` flag on `herdr agent start` to assign a parent pane token upon agent startup.

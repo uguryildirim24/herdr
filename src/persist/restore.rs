@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use ratatui::layout::Direction;
 use tokio::sync::{mpsc, Notify};
@@ -38,6 +39,8 @@ struct RestoreRuntimeContext<'a> {
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'a>,
     resume_agents_on_restore: bool,
+    /// `None` restores every captured non-TTL token (live handoff).
+    restore_token_keys: Option<&'a [String]>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -62,6 +65,7 @@ type RestoredTab = (
 type RestoreFailures<T> = (T, usize);
 
 /// Restore workspaces from a snapshot. Each pane gets a fresh shell in its saved cwd.
+#[allow(clippy::too_many_arguments)] // restore_token_keys is the cold/handoff filter; the previous signature was already at the clippy cap.
 pub fn restore(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -71,6 +75,7 @@ pub fn restore(
     default_shell: &str,
     shell_mode: crate::config::ShellModeConfig,
     resume_agents_on_restore: bool,
+    restore_token_keys: Option<&[String]>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -84,6 +89,7 @@ pub fn restore(
         scrollback_limit_bytes,
         crate::pane::PaneShellConfig::new(default_shell, shell_mode),
         resume_agents_on_restore,
+        restore_token_keys,
         &mut imported_panes,
         events,
         render_notify,
@@ -110,6 +116,7 @@ pub fn restore_handoff(
         scrollback_limit_bytes,
         crate::pane::PaneShellConfig::new(default_shell, shell_mode),
         true,
+        None,
         imports,
         events,
         render_notify,
@@ -185,6 +192,7 @@ fn collect_layout_snapshot_pane_ids(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)] // Mirrors restore(); restore_token_keys is the cold/handoff filter.
 fn restore_with_imports_strict(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -193,6 +201,7 @@ fn restore_with_imports_strict(
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
+    restore_token_keys: Option<&[String]>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
@@ -206,6 +215,7 @@ fn restore_with_imports_strict(
         scrollback_limit_bytes,
         shell_config,
         resume_agents_on_restore,
+        restore_token_keys,
         imported_panes,
         events,
         render_notify,
@@ -225,6 +235,7 @@ fn restore_with_imports_strict(
     Ok(restored)
 }
 
+#[allow(clippy::too_many_arguments)] // Mirrors restore(); restore_token_keys is the cold/handoff filter.
 fn restore_with_imports(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -233,6 +244,7 @@ fn restore_with_imports(
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
+    restore_token_keys: Option<&[String]>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
@@ -246,6 +258,7 @@ fn restore_with_imports(
         scrollback_limit_bytes,
         shell_config,
         resume_agents_on_restore,
+        restore_token_keys,
         imported_panes,
         events,
         render_notify,
@@ -254,6 +267,7 @@ fn restore_with_imports(
     .0
 }
 
+#[allow(clippy::too_many_arguments)] // Mirrors restore(); restore_token_keys is the cold/handoff filter.
 fn restore_with_imports_and_failures(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -262,6 +276,7 @@ fn restore_with_imports_and_failures(
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
+    restore_token_keys: Option<&[String]>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
@@ -277,6 +292,7 @@ fn restore_with_imports_and_failures(
             scrollback_limit_bytes,
             shell_config,
             resume_agents_on_restore,
+            restore_token_keys,
             events: events.clone(),
             render_notify: render_notify.clone(),
             render_dirty: render_dirty.clone(),
@@ -300,6 +316,7 @@ fn restore_with_imports_and_failures(
         }
     }
     crate::workspace::reserve_workspace_ids(&workspaces);
+    drop_unresolved_parents(&workspaces, &mut terminals);
     ((workspaces, terminals, terminal_runtimes), failed_imports)
 }
 
@@ -418,7 +435,10 @@ fn restore_workspace(
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space,
-            metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+            metadata_tokens: crate::metadata_tokens::MetadataTokens::from_values(filtered_tokens(
+                &snap.tokens,
+                runtime_context.restore_token_keys,
+            )),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
             next_public_pane_number,
@@ -496,6 +516,12 @@ fn restore_tab(
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
+        let managed_agent_args = saved_pane
+            .map(|pane| pane.managed_agent_args.clone())
+            .unwrap_or_default();
+        let saved_tokens = saved_pane
+            .map(|pane| filtered_tokens(&pane.tokens, runtime_context.restore_token_keys))
+            .unwrap_or_default();
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let saved_history =
             old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
@@ -504,7 +530,12 @@ fn restore_tab(
                 enabled: runtime_context.resume_agents_on_restore,
                 resumed_sessions: resumed_agent_sessions,
             };
-            pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore)
+            pane_restore_startup(
+                saved_agent_session,
+                saved_history,
+                &mut agent_restore,
+                &managed_agent_args,
+            )
         };
         let restored_agent_session =
             restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
@@ -547,9 +578,10 @@ fn restore_tab(
                 (Some(agent_name), Some(agent)) => {
                     terminal.restore_managed_agent(agent_name, agent)
                 }
-                (Some(_), None) => {}
+                (Some(agent_name), None) => terminal.set_agent_name(agent_name),
                 (None, _) => {}
             }
+            apply_restored_pane_lineage(&mut terminal, &saved_tokens, &managed_agent_args);
             if let Some(agent) = initial_restore_agent {
                 let _ = terminal.set_detected_state_with_screen_signals_at(
                     Some(agent),
@@ -649,6 +681,7 @@ fn restore_tab(
                     (Some(_), None) => {}
                     (None, _) => {}
                 }
+                apply_restored_pane_lineage(&mut terminal, &saved_tokens, &managed_agent_args);
                 if let Some(agent) = initial_restore_agent {
                     let _ = terminal.set_detected_state_with_screen_signals_at(
                         Some(agent),
@@ -740,13 +773,15 @@ fn pane_restore_startup<'a>(
     session: Option<&PaneAgentSessionSnapshot>,
     history: Option<&'a PaneHistorySnapshot>,
     agent_restore: &mut AgentRestoreState<'_>,
+    managed_args: &[String],
 ) -> PaneRestoreStartup<'a> {
     // Native agent resume owns the conversation history. If a pane has a
     // resumable agent session and resume is enabled, do not replay saved pane
     // presentation history into that terminal, even when this pane is a
     // duplicate suppressed by session de-duplication.
-    let restore_plan =
-        session.and_then(|session| restore_plan_for_snapshot(session, agent_restore.enabled));
+    let restore_plan = session.and_then(|session| {
+        restore_plan_for_snapshot(session, agent_restore.enabled, managed_args)
+    });
     let has_native_agent_restore = restore_plan.is_some();
     // Reserve before spawning so later panes in the same restore pass cannot
     // launch the same native agent session. The caller rolls this reservation
@@ -784,12 +819,18 @@ fn pane_restore_startup<'a>(
 fn restore_plan_for_snapshot(
     session: &PaneAgentSessionSnapshot,
     resume_agents_on_restore: bool,
+    managed_args: &[String],
 ) -> Option<crate::agent_resume::AgentResumePlan> {
     if !resume_agents_on_restore {
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    crate::agent_resume::plan_with_managed_args(
+        &session.source,
+        &session.agent,
+        &persisted.session_ref,
+        managed_args,
+    )
 }
 
 fn persisted_agent_session_from_snapshot(
@@ -819,8 +860,66 @@ fn take_restore_plan_for_snapshot(
     resume_agents_on_restore: bool,
     resumed_agent_sessions: &mut HashSet<String>,
 ) -> Option<crate::agent_resume::AgentResumePlan> {
-    restore_plan_for_snapshot(session, resume_agents_on_restore)
+    restore_plan_for_snapshot(session, resume_agents_on_restore, &[])
         .filter(|plan| resumed_agent_sessions.insert(plan.dedupe_key.clone()))
+}
+
+const PARENT_TOKEN: &str = "parent";
+
+fn filtered_tokens(
+    tokens: &HashMap<String, String>,
+    restore_token_keys: Option<&[String]>,
+) -> HashMap<String, String> {
+    match restore_token_keys {
+        None => tokens.clone(),
+        Some(keys) => tokens
+            .iter()
+            .filter(|(key, _)| keys.iter().any(|want| want == *key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    }
+}
+
+fn apply_restored_pane_lineage(
+    terminal: &mut TerminalState,
+    tokens: &HashMap<String, String>,
+    managed_agent_args: &[String],
+) {
+    if !tokens.is_empty() {
+        terminal.metadata_tokens =
+            crate::metadata_tokens::MetadataTokens::from_values(tokens.clone());
+    }
+    terminal.managed_agent_args = managed_agent_args.to_vec();
+}
+
+fn drop_unresolved_parents(
+    workspaces: &[Workspace],
+    terminals: &mut HashMap<TerminalId, TerminalState>,
+) {
+    let restored_pane_ids: HashSet<String> = workspaces
+        .iter()
+        .flat_map(|workspace| {
+            workspace
+                .public_pane_numbers
+                .values()
+                .copied()
+                .map(|number| crate::workspace::public_pane_id_for_number(&workspace.id, number))
+        })
+        .collect();
+    let now = Instant::now();
+    for terminal in terminals.values_mut() {
+        let Some(parent) = terminal.metadata_tokens.get(PARENT_TOKEN) else {
+            continue;
+        };
+        if restored_pane_ids.contains(parent) {
+            continue;
+        }
+        terminal.metadata_tokens.patch(
+            HashMap::from([(PARENT_TOKEN.to_string(), None)]),
+            None,
+            now,
+        );
+    }
 }
 
 pub(super) fn prune_restored_node(node: Node, surviving: &HashSet<PaneId>) -> Option<Node> {
@@ -1019,9 +1118,9 @@ mod tests {
             value: pi_session_path.clone(),
         };
 
-        assert!(restore_plan_for_snapshot(&session, false).is_none());
+        assert!(restore_plan_for_snapshot(&session, false, &[]).is_none());
         assert_eq!(
-            restore_plan_for_snapshot(&session, true).unwrap().argv,
+            restore_plan_for_snapshot(&session, true, &[]).unwrap().argv,
             vec!["pi", "--session", pi_session_path.as_str()]
         );
 
@@ -1031,7 +1130,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
         };
-        assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
+        assert!(restore_plan_for_snapshot(&unsupported_path, true, &[]).is_none());
     }
 
     #[test]
@@ -1075,7 +1174,7 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore, &[]);
 
         assert!(startup.restore_plan.is_some());
         assert!(startup.initial_history_ansi.is_none());
@@ -1100,8 +1199,9 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let first = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
-        let duplicate = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let first = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore, &[]);
+        let duplicate =
+            pane_restore_startup(Some(&session), Some(&history), &mut agent_restore, &[]);
 
         assert!(first.restore_plan.is_some());
         assert!(first.initial_history_ansi.is_none());
@@ -1128,7 +1228,7 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore, &[]);
 
         assert!(startup.restore_plan.is_none());
         assert_eq!(startup.initial_history_ansi, Some("RESTORED_HISTORY\r\n"));
@@ -1177,6 +1277,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1198,6 +1299,8 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            tokens: HashMap::new(),
+                            managed_agent_args: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1223,6 +1326,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             false,
+            None,
             events,
             Arc::new(Notify::new()),
             Arc::new(RenderSignal::new()),
@@ -1257,6 +1361,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::from([(10, 1), (20, 3)]),
                 next_public_pane_number: 4,
                 public_tab_numbers: vec![5],
@@ -1279,6 +1384,8 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                tokens: HashMap::new(),
+                                managed_agent_args: Vec::new(),
                             },
                         ),
                         (
@@ -1290,6 +1397,8 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                tokens: HashMap::new(),
+                                managed_agent_args: Vec::new(),
                             },
                         ),
                     ]),
@@ -1316,6 +1425,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             false,
+            None,
             events,
             Arc::new(Notify::new()),
             Arc::new(RenderSignal::new()),
@@ -1343,6 +1453,8 @@ mod tests {
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
+                    tokens: HashMap::new(),
+                    managed_agent_args: Vec::new(),
                 },
             )
         };
@@ -1358,6 +1470,8 @@ mod tests {
                 value: "codex-session".into(),
             }),
             launch_argv: None,
+            tokens: HashMap::new(),
+            managed_agent_args: Vec::new(),
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1366,6 +1480,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::from([(10, 1), (11, 2), (12, 3), (13, 4)]),
                 next_public_pane_number: 5,
                 public_tab_numbers: vec![1, 3, 4, 5],
@@ -1423,6 +1538,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             false,
+            None,
             events,
             Arc::new(Notify::new()),
             Arc::new(RenderSignal::new()),
@@ -1449,6 +1565,7 @@ mod tests {
             custom_name: None,
             identity_cwd: cwd,
             worktree_space: None,
+            tokens: HashMap::new(),
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -1488,6 +1605,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1509,6 +1627,8 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            tokens: HashMap::new(),
+                            managed_agent_args: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1534,6 +1654,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             true,
+            None,
             events,
             Arc::new(Notify::new()),
             Arc::new(RenderSignal::new()),
@@ -1597,6 +1718,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             false,
+            None,
             events,
             render_notify,
             render_dirty,
@@ -1635,6 +1757,7 @@ mod tests {
             test_restore_shell(),
             crate::config::ShellModeConfig::NonLogin,
             false,
+            None,
             events,
             render_notify,
             render_dirty,
@@ -1670,6 +1793,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                tokens: HashMap::new(),
+                managed_agent_args: Vec::new(),
             },
         );
         let history = SessionHistorySnapshot {
@@ -1697,6 +1822,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd,
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1718,5 +1844,359 @@ mod tests {
             collapsed_space_keys: Default::default(),
         };
         (snapshot, history)
+    }
+
+    fn pane_snapshot(
+        cwd: PathBuf,
+        agent_name: Option<&str>,
+        kind: Option<&str>,
+        session: Option<super::super::snapshot::PaneAgentSessionSnapshot>,
+        tokens: &[(&str, &str)],
+        args: &[&str],
+        launch_argv: Option<Vec<String>>,
+    ) -> super::super::snapshot::PaneSnapshot {
+        super::super::snapshot::PaneSnapshot {
+            cwd,
+            label: None,
+            agent_name: agent_name.map(str::to_string),
+            managed_agent_kind: kind.map(str::to_string),
+            agent_session: session,
+            launch_argv,
+            tokens: tokens
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect(),
+            managed_agent_args: args.iter().map(|arg| (*arg).into()).collect(),
+        }
+    }
+
+    fn claude_session(id: &str) -> super::super::snapshot::PaneAgentSessionSnapshot {
+        super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: id.into(),
+        }
+    }
+
+    fn cursor_session(id: &str) -> super::super::snapshot::PaneAgentSessionSnapshot {
+        super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:cursor".into(),
+            agent: "cursor".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: id.into(),
+        }
+    }
+
+    fn restore_now(
+        snapshot: &SessionSnapshot,
+        resume: bool,
+        keys: Option<&[String]>,
+    ) -> (Vec<Workspace>, HashMap<TerminalId, TerminalState>) {
+        let (events, _event_rx) = mpsc::channel(4);
+        let (workspaces, terminals, runtimes) = restore(
+            snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            resume,
+            keys,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        for runtime in runtimes.into_values() {
+            let _ = runtime.try_send_bytes(bytes::Bytes::from_static(b"exit\n"));
+            runtime.shutdown();
+        }
+        (workspaces, terminals)
+    }
+
+    fn terminal_for_public_number<'a>(
+        workspace: &Workspace,
+        terminals: &'a HashMap<TerminalId, TerminalState>,
+        number: usize,
+    ) -> &'a TerminalState {
+        let pane_id = workspace
+            .public_pane_numbers
+            .iter()
+            .find_map(|(pane_id, pane_number)| (*pane_number == number).then_some(*pane_id))
+            .expect("public pane number should exist");
+        let tab = workspace
+            .tabs
+            .iter()
+            .find(|tab| tab.panes.contains_key(&pane_id))
+            .expect("pane should belong to a tab");
+        &terminals[&tab.panes[&pane_id].attached_terminal_id]
+    }
+
+    fn two_pane_snapshot(
+        cwd: PathBuf,
+        parent: super::super::snapshot::PaneSnapshot,
+        child: super::super::snapshot::PaneSnapshot,
+        workspace_tokens: &[(&str, &str)],
+    ) -> SessionSnapshot {
+        SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("w1".into()),
+                custom_name: None,
+                identity_cwd: cwd,
+                worktree_space: None,
+                tokens: workspace_tokens
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+                public_pane_numbers: HashMap::from([(10, 1), (20, 2)]),
+                next_public_pane_number: 3,
+                public_tab_numbers: vec![1],
+                next_public_tab_number: 2,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Split {
+                        direction: super::super::snapshot::DirectionSnapshot::Horizontal,
+                        ratio: 0.5,
+                        first: Box::new(LayoutSnapshot::Pane(10)),
+                        second: Box::new(LayoutSnapshot::Pane(20)),
+                    },
+                    panes: HashMap::from([(10, parent), (20, child)]),
+                    zoomed: false,
+                    focused: Some(10),
+                    root_pane: Some(10),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        }
+    }
+
+    #[test]
+    fn restore_plan_replays_managed_args_per_kind() {
+        let cursor = cursor_session("cursor-session");
+        let args = ["--force".into(), "--model".into(), "m".into()];
+        assert_eq!(
+            restore_plan_for_snapshot(&cursor, true, &args)
+                .unwrap()
+                .argv,
+            vec![
+                if cfg!(windows) {
+                    "cursor-agent.cmd"
+                } else {
+                    "cursor-agent"
+                },
+                "--resume",
+                "cursor-session",
+                "--force",
+                "--model",
+                "m",
+            ]
+        );
+
+        let claude = claude_session("claude-session");
+        assert_eq!(
+            restore_plan_for_snapshot(&claude, true, &args)
+                .unwrap()
+                .argv,
+            vec![
+                "claude",
+                "--resume",
+                "claude-session",
+                "--force",
+                "--model",
+                "m",
+            ]
+        );
+
+        let opencode = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "opencode-session".into(),
+        };
+        assert_eq!(
+            restore_plan_for_snapshot(&opencode, true, &args)
+                .unwrap()
+                .argv,
+            vec!["opencode", "--session", "opencode-session"]
+        );
+    }
+
+    #[tokio::test]
+    async fn cold_restore_keeps_lane_tokens_and_drops_status_tokens() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = two_pane_snapshot(
+            cwd.clone(),
+            pane_snapshot(
+                cwd.clone(),
+                Some("hcoord"),
+                None,
+                Some(claude_session("claude-session")),
+                &[("lane", "coord"), ("done", "1")],
+                &[],
+                None,
+            ),
+            pane_snapshot(
+                cwd,
+                Some("lane-a"),
+                Some("cursor"),
+                Some(cursor_session("cursor-session")),
+                &[("parent", "w1:p1"), ("lane", "lane-a"), ("done", "1")],
+                &["--force", "--model", "m"],
+                Some(vec!["echo".into(), "ran".into()]),
+            ),
+            &[("round", "r1"), ("branch", "lane/x"), ("waiting", "review")],
+        );
+        let keys = [
+            "parent".into(),
+            "lane".into(),
+            "round".into(),
+            "branch".into(),
+        ];
+        let (workspaces, terminals) = restore_now(&snapshot, true, Some(&keys));
+        let workspace = &workspaces[0];
+        assert_eq!(workspace.metadata_tokens.get("round"), Some("r1"));
+        assert_eq!(workspace.metadata_tokens.get("branch"), Some("lane/x"));
+        assert_eq!(workspace.metadata_tokens.get("waiting"), None);
+
+        let parent = terminal_for_public_number(workspace, &terminals, 1);
+        assert_eq!(parent.agent_name.as_deref(), Some("hcoord"));
+        assert_eq!(parent.metadata_tokens.get("lane"), Some("coord"));
+        assert_eq!(parent.metadata_tokens.get("done"), None);
+
+        let child = terminal_for_public_number(workspace, &terminals, 2);
+        assert_eq!(child.agent_name.as_deref(), Some("lane-a"));
+        assert_eq!(child.metadata_tokens.get("parent"), Some("w1:p1"));
+        assert_eq!(child.metadata_tokens.get("lane"), Some("lane-a"));
+        assert_eq!(child.metadata_tokens.get("done"), None);
+        assert_eq!(child.managed_agent_args, vec!["--force", "--model", "m"]);
+        assert!(child.launch_argv.is_none());
+        assert_eq!(
+            child
+                .pending_agent_resume_plan
+                .as_ref()
+                .map(|plan| plan.argv.clone()),
+            Some(vec![
+                if cfg!(windows) {
+                    "cursor-agent.cmd".into()
+                } else {
+                    "cursor-agent".into()
+                },
+                "--resume".into(),
+                "cursor-session".into(),
+                "--force".into(),
+                "--model".into(),
+                "m".into(),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_restore_keeps_every_captured_token() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = two_pane_snapshot(
+            cwd.clone(),
+            pane_snapshot(
+                cwd.clone(),
+                Some("hcoord"),
+                None,
+                Some(claude_session("claude-session")),
+                &[("lane", "coord"), ("done", "1")],
+                &[],
+                None,
+            ),
+            pane_snapshot(
+                cwd,
+                Some("lane-a"),
+                Some("cursor"),
+                Some(cursor_session("cursor-session")),
+                &[("parent", "w1:p1"), ("lane", "lane-a"), ("done", "1")],
+                &[],
+                None,
+            ),
+            &[("round", "r1"), ("waiting", "review")],
+        );
+        let (workspaces, terminals) = restore_now(&snapshot, true, None);
+        let workspace = &workspaces[0];
+        assert_eq!(workspace.metadata_tokens.get("waiting"), Some("review"));
+        let child = terminal_for_public_number(workspace, &terminals, 2);
+        assert_eq!(child.metadata_tokens.get("done"), Some("1"));
+        assert_eq!(child.metadata_tokens.get("parent"), Some("w1:p1"));
+    }
+
+    #[tokio::test]
+    async fn restore_drops_parent_that_does_not_resolve() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = two_pane_snapshot(
+            cwd.clone(),
+            pane_snapshot(
+                cwd.clone(),
+                Some("hcoord"),
+                None,
+                Some(claude_session("claude-session")),
+                &[],
+                &[],
+                None,
+            ),
+            pane_snapshot(
+                cwd,
+                Some("lane-a"),
+                Some("cursor"),
+                Some(cursor_session("cursor-session")),
+                &[("parent", "w1:p99")],
+                &[],
+                None,
+            ),
+            &[],
+        );
+        let (workspaces, terminals) = restore_now(&snapshot, true, None);
+        let child = terminal_for_public_number(&workspaces[0], &terminals, 2);
+        assert_eq!(child.metadata_tokens.get("parent"), None);
+    }
+
+    #[tokio::test]
+    async fn named_pane_without_resume_plan_drops_name_on_cold_restore() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = two_pane_snapshot(
+            cwd.clone(),
+            pane_snapshot(
+                cwd.clone(),
+                Some("hcoord"),
+                None,
+                None,
+                &[],
+                &[],
+                Some(vec!["sleep".into(), "1".into()]),
+            ),
+            pane_snapshot(
+                cwd,
+                Some("chat"),
+                Some("chatgpt"),
+                Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                    source: "herdr:chatgpt".into(),
+                    agent: "chatgpt".into(),
+                    kind: crate::agent_resume::AgentSessionRefKind::Id,
+                    value: "chat-session".into(),
+                }),
+                &[],
+                &[],
+                None,
+            ),
+            &[],
+        );
+        let (workspaces, terminals) = restore_now(&snapshot, true, None);
+        let unnamed = terminal_for_public_number(&workspaces[0], &terminals, 1);
+        assert!(unnamed.agent_name.is_none());
+        assert!(unnamed.pending_agent_resume_plan.is_none());
+        assert!(unnamed.launch_argv.is_none());
+        let chatgpt = terminal_for_public_number(&workspaces[0], &terminals, 2);
+        assert!(chatgpt.agent_name.is_none());
+        assert!(chatgpt.pending_agent_resume_plan.is_none());
     }
 }

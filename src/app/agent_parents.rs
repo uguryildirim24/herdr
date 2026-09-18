@@ -146,6 +146,40 @@ impl App {
             tracing::debug!(%parent, %text, %response, "agent parent notification not delivered");
         }
     }
+
+    /// Rebuild parent links after cold restore or live handoff. Terminal ids
+    /// change, so the in-memory map cannot be reused. A child that stays
+    /// blocked across the restore does not re-fire BLOCKED.
+    pub(crate) fn reindex_after_restore(&mut self) {
+        self.agent_parent_links.clear();
+        let mut pane_ids = Vec::new();
+        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
+            for tab in &workspace.tabs {
+                for pane_id in tab.layout.pane_ids() {
+                    if let Some(public_id) = self.public_pane_id(ws_idx, pane_id) {
+                        pane_ids.push(public_id);
+                    }
+                }
+            }
+        }
+        for public_id in pane_ids {
+            self.index_restored_agent_parent_link(&public_id);
+        }
+    }
+
+    fn index_restored_agent_parent_link(&mut self, public_pane_id: &str) {
+        let Some(terminal_id) = self.refresh_agent_parent_link(public_pane_id) else {
+            return;
+        };
+        let blocked = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .is_some_and(|terminal| terminal.state == crate::detect::AgentState::Blocked);
+        if let Some(link) = self.agent_parent_links.get_mut(&terminal_id) {
+            link.blocked_notified = blocked;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -319,5 +353,20 @@ mod tests {
         let config: Config =
             toml::from_str("[experimental]\nagent_parent_notify = true\n").unwrap();
         assert!(config.experimental.agent_parent_notify);
+    }
+
+    #[tokio::test]
+    async fn reindex_after_restore_seeds_blocked_notified() {
+        let mut h = harness(true, true);
+        terminal_mut(&mut h.app, 1, h.child_pane)
+            .set_detected_state(Some(Agent::Claude), AgentState::Blocked);
+        h.app.reindex_after_restore();
+
+        h.child_status(AgentState::Blocked, AgentStatus::Blocked);
+        assert_eq!(h.parent_input(), "");
+
+        h.child_status(AgentState::Working, AgentStatus::Working);
+        h.child_status(AgentState::Blocked, AgentStatus::Blocked);
+        assert_eq!(h.parent_input(), "BLOCKED w1\r");
     }
 }

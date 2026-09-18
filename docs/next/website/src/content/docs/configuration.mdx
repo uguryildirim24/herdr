@@ -598,9 +598,10 @@ Herdr resumes supported Agent conversations after a server restart by default:
 ```toml
 [session]
 resume_agents_on_restore = true
+restore_tokens = ["parent", "lane", "round", "branch"]
 ```
 
-Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
+Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. After a cold restart, Herdr restores only the metadata token keys in `restore_tokens`. A live handoff restores every token that has no TTL. Status tokens such as `done` and `waiting` are not restored after a cold stop unless you add them to this list. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
 
 ## IME cursor tracking
 

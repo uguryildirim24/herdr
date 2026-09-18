@@ -55,6 +55,9 @@ pub struct WorkspaceSnapshot {
     pub identity_cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
+    /// Non-TTL workspace metadata tokens. Empty on snapshots from 0.9.0/0.9.1.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tokens: HashMap<String, String>,
     #[serde(default)]
     pub public_pane_numbers: HashMap<u32, usize>,
     #[serde(default)]
@@ -107,6 +110,12 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// Non-TTL pane metadata tokens. Empty on snapshots from 0.9.0/0.9.1.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tokens: HashMap<String, String>,
+    /// Args from `agent start`, replayed on cold native resume. Empty on older snapshots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_agent_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +167,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             custom_name: snap.custom_name,
             identity_cwd,
             worktree_space: None,
+            tokens: HashMap::new(),
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -288,6 +298,7 @@ fn capture_workspace(
             .resolved_identity_cwd_from(terminals, terminal_runtimes)
             .unwrap_or_else(|| ws.identity_cwd.clone()),
         worktree_space: ws.worktree_space.clone(),
+        tokens: ws.metadata_tokens.persistent_values(),
         public_pane_numbers: ws
             .public_pane_numbers
             .iter()
@@ -335,6 +346,12 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let tokens = terminal
+            .map(|terminal| terminal.metadata_tokens.persistent_values())
+            .unwrap_or_default();
+        let managed_agent_args = terminal
+            .map(|terminal| terminal.managed_agent_args.clone())
+            .unwrap_or_default();
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -365,6 +382,8 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                tokens,
+                managed_agent_args,
             },
         );
     }
@@ -646,6 +665,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                tokens: HashMap::new(),
+                managed_agent_args: Vec::new(),
             },
         );
         panes.insert(
@@ -657,6 +678,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                tokens: HashMap::new(),
+                managed_agent_args: Vec::new(),
             },
         );
 
@@ -666,6 +689,7 @@ mod tests {
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
                 public_tab_numbers: vec![1],
@@ -1210,6 +1234,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                tokens: HashMap::new(),
+                managed_agent_args: Vec::new(),
             },
         );
         panes.insert(
@@ -1223,6 +1249,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                tokens: HashMap::new(),
+                managed_agent_args: Vec::new(),
             },
         );
 
@@ -1233,6 +1261,7 @@ mod tests {
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
                 worktree_space: None,
+                tokens: HashMap::new(),
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1266,5 +1295,70 @@ mod tests {
             restored.workspaces[0].tabs[0].panes[&0].cwd,
             PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test")
         );
+    }
+
+    #[test]
+    fn pane_and_workspace_snapshots_without_lineage_fields_still_load() {
+        let pane: PaneSnapshot = serde_json::from_str(r#"{"cwd":"/tmp"}"#).unwrap();
+        assert!(pane.tokens.is_empty());
+        assert!(pane.managed_agent_args.is_empty());
+
+        let workspace: WorkspaceSnapshot =
+            serde_json::from_str(r#"{"identity_cwd":"/tmp","tabs":[]}"#).unwrap();
+        assert!(workspace.tokens.is_empty());
+    }
+
+    #[test]
+    fn capture_copies_non_ttl_tokens_and_managed_agent_args() {
+        let mut state = state_with_workspaces(&["lineage"]);
+        let now = std::time::Instant::now();
+        state.workspaces[0].metadata_tokens.patch(
+            HashMap::from([
+                ("round".into(), Some("r2".into())),
+                ("waiting".into(), Some("review".into())),
+            ]),
+            None,
+            now,
+        );
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.metadata_tokens.patch(
+            HashMap::from([
+                ("parent".into(), Some("w1:p1".into())),
+                ("done".into(), Some("1".into())),
+            ]),
+            None,
+            now,
+        );
+        terminal.metadata_tokens.patch(
+            HashMap::from([("radar".into(), Some("tmp".into()))]),
+            Some(std::time::Duration::from_secs(30)),
+            now,
+        );
+        terminal.managed_agent_args = vec!["--force".into(), "--model".into(), "m".into()];
+
+        let snapshot = capture_from_state(&state);
+        assert_eq!(
+            snapshot.workspaces[0]
+                .tokens
+                .get("round")
+                .map(String::as_str),
+            Some("r2")
+        );
+        assert_eq!(
+            snapshot.workspaces[0]
+                .tokens
+                .get("waiting")
+                .map(String::as_str),
+            Some("review")
+        );
+        let pane = &snapshot.workspaces[0].tabs[0].panes[&root.raw()];
+        assert_eq!(pane.tokens.get("parent").map(String::as_str), Some("w1:p1"));
+        assert_eq!(pane.tokens.get("done").map(String::as_str), Some("1"));
+        assert!(!pane.tokens.contains_key("radar"));
+        assert_eq!(pane.managed_agent_args, vec!["--force", "--model", "m"]);
     }
 }
