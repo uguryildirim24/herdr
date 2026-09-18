@@ -122,13 +122,14 @@ compinit
 ```bash
 herdr server
 herdr server stop
+herdr server restart [--exec PATH] [--force]
 herdr server reload-config
 herdr server agent-manifests [--json]
 herdr server update-agent-manifests [--json]
 herdr server reload-agent-manifests
 ```
 
-`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
+`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `herdr server restart` replaces the running local server and keeps pane processes. It is Unix-only and local-only; `--remote` and `--machine` refuse it. `--exec` must be an absolute executable Herdr binary. `--force` overrides a pending agent start/resume and a config load error, not `--exec` checks. `herdr server live-handoff` remains as a hidden alias for older scripts. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits. See [Session state and restore](/docs/session-state/) for the first 0.9.0 bounce and what survives a restart.
 
 ## Notifications
 
