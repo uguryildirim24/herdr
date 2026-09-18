@@ -173,6 +173,42 @@ fn agent_start_and_prompt_requests_round_trip() {
 }
 
 #[test]
+fn agent_start_parent_is_optional_and_omitted_when_none() {
+    let without_parent = AgentStartParams {
+        name: "reviewer".into(),
+        kind: "pi".into(),
+        pane_id: "w1:p2".into(),
+        args: Vec::new(),
+        timeout_ms: None,
+        parent: None,
+    };
+    let json = serde_json::to_value(&without_parent).unwrap();
+    assert!(json.get("parent").is_none());
+    let parsed: AgentStartParams = serde_json::from_value(serde_json::json!({
+        "name": "reviewer",
+        "kind": "pi",
+        "pane_id": "w1:p2"
+    }))
+    .unwrap();
+    assert_eq!(parsed.parent, None);
+
+    let with_parent = AgentStartParams {
+        name: "reviewer".into(),
+        kind: "pi".into(),
+        pane_id: "w1:p2".into(),
+        args: Vec::new(),
+        timeout_ms: None,
+        parent: Some("w1:p1".into()),
+    };
+    let json = serde_json::to_value(&with_parent).unwrap();
+    assert_eq!(json["parent"], "w1:p1");
+    assert_eq!(
+        serde_json::from_value::<AgentStartParams>(json).unwrap(),
+        with_parent
+    );
+}
+
+#[test]
 fn bundled_protocol_schema_refs_resolve_inside_bundle() {
     fn assert_no_standalone_refs(value: &serde_json::Value) {
         match value {

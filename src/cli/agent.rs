@@ -420,7 +420,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                 pane_id: pane_id.clone(),
                 args: agent_args.clone(),
                 timeout_ms,
-                parent: None,
+                parent: parent_pane_id.clone(),
             }),
         })?;
         if response.get("error").is_none() {
@@ -470,50 +470,55 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
     match waited {
         Ok(Ok(mut agent)) => {
             if let Some(parent_id) = parent_pane_id {
-                let target_pane_id = agent["pane_id"].as_str().unwrap_or(&pane_id).to_string();
-                let mut tokens = std::collections::HashMap::new();
-                tokens.insert("parent".to_string(), Some(parent_id.clone()));
-                let report_response = super::send_request(&Request {
-                    id: "cli:agent:start:parent".into(),
-                    method: Method::PaneReportMetadata(PaneReportMetadataParams {
-                        pane_id: target_pane_id,
-                        source: "herdr:agent-start".to_string(),
-                        agent: None,
-                        applies_to_source: None,
-                        title: None,
-                        display_agent: None,
-                        state_labels: std::collections::HashMap::new(),
-                        tokens,
-                        clear_title: false,
-                        clear_display_agent: false,
-                        clear_state_labels: false,
-                        seq: None,
-                        ttl_ms: None,
-                    }),
-                });
-                match report_response {
-                    Ok(ref resp) if resp.get("error").is_some() => {
-                        let err_msg = resp["error"]["message"]
-                            .as_str()
-                            .unwrap_or("failed to report parent metadata");
-                        return super::print_response(&cli_agent_error(
-                            "cli:agent:start",
-                            "agent_parent_report_failed",
-                            format!(
-                                "agent {name} is running, but failed to report parent metadata: {err_msg}"
-                            ),
-                        ));
+                if !start_response_applied_parent(&response, &parent_id) {
+                    let target_pane_id = agent["pane_id"].as_str().unwrap_or(&pane_id).to_string();
+                    let mut tokens = std::collections::HashMap::new();
+                    tokens.insert("parent".to_string(), Some(parent_id.clone()));
+                    let report_response = super::send_request(&Request {
+                        id: "cli:agent:start:parent".into(),
+                        method: Method::PaneReportMetadata(PaneReportMetadataParams {
+                            pane_id: target_pane_id,
+                            source: "herdr:agent-start".to_string(),
+                            agent: None,
+                            applies_to_source: None,
+                            title: None,
+                            display_agent: None,
+                            state_labels: std::collections::HashMap::new(),
+                            tokens,
+                            clear_title: false,
+                            clear_display_agent: false,
+                            clear_state_labels: false,
+                            seq: None,
+                            ttl_ms: None,
+                        }),
+                    });
+                    match report_response {
+                        Ok(ref resp) if is_parent_cycle_error(resp) => {
+                            return super::print_response(resp);
+                        }
+                        Ok(ref resp) if resp.get("error").is_some() => {
+                            let err_msg = resp["error"]["message"]
+                                .as_str()
+                                .unwrap_or("failed to report parent metadata");
+                            return super::print_response(&cli_agent_error(
+                                "cli:agent:start",
+                                "agent_parent_report_failed",
+                                format!(
+                                    "agent {name} is running, but failed to report parent metadata: {err_msg}"
+                                ),
+                            ));
+                        }
+                        Err(err) => {
+                            return super::print_response(&cli_agent_error(
+                                "cli:agent:start",
+                                "agent_parent_report_failed",
+                                format!(
+                                    "agent {name} is running, but failed to report parent metadata: {err}"
+                                ),
+                            ));
+                        }
+                        _ => {}
                     }
-                    Err(err) => {
-                        return super::print_response(&cli_agent_error(
-                            "cli:agent:start",
-                            "agent_parent_report_failed",
-                            format!(
-                                "agent {name} is running, but failed to report parent metadata: {err}"
-                            ),
-                        ));
-                    }
-                    _ => {}
                 }
                 attach_parent_token(&mut agent, parent_id);
             }
@@ -860,6 +865,14 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+fn start_response_applied_parent(response: &serde_json::Value, parent_id: &str) -> bool {
+    response["result"]["agent"]["tokens"]["parent"].as_str() == Some(parent_id)
+}
+
+fn is_parent_cycle_error(response: &serde_json::Value) -> bool {
+    response["error"]["code"].as_str() == Some("parent_cycle")
+}
+
 fn attach_parent_token(agent: &mut serde_json::Value, parent_id: String) {
     match agent.get_mut("tokens") {
         Some(serde_json::Value::Object(tokens)) => {
@@ -1197,6 +1210,35 @@ mod tests {
             agent_set_parent(&args(&["w1:p2", "w1:p1", "--clear"])).unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn start_response_applied_parent_reads_tokens_parent() {
+        let applied = serde_json::json!({
+            "result": { "agent": { "tokens": { "parent": "w1:p1" } } }
+        });
+        assert!(start_response_applied_parent(&applied, "w1:p1"));
+        assert!(!start_response_applied_parent(&applied, "w1:p2"));
+        let ignored = serde_json::json!({
+            "result": { "agent": { "pane_id": "w1:p2" } }
+        });
+        assert!(!start_response_applied_parent(&ignored, "w1:p1"));
+    }
+
+    #[test]
+    fn parent_cycle_error_is_exit_one_json() {
+        let response = serde_json::json!({
+            "id": "cli:agent:set-parent",
+            "error": {
+                "code": "parent_cycle",
+                "message": "parent would make this pane its own ancestor"
+            }
+        });
+        assert!(is_parent_cycle_error(&response));
+        assert!(!is_parent_cycle_error(&serde_json::json!({
+            "error": { "code": "agent_parent_report_failed" }
+        })));
+        assert_eq!(super::super::print_response(&response).unwrap(), 1);
     }
 
     #[test]

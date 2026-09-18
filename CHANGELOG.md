@@ -8,6 +8,7 @@
 - Collapsible subtrees in the Agents panel with chevron toggle and roll-up status badge for hidden child agents.
 - `--parent <PANE_ID>` flag on `herdr agent start` to assign a parent pane token upon agent startup.
 - `herdr agent set-parent <agent|pane_id> (<parent_pane_id> | --clear)` command to assign or remove an agent's parent metadata token.
+- Refuse a `parent` metadata token that would make a pane its own ancestor (`parent_cycle`). `parent` cannot use a TTL, and workspace metadata cannot set `parent`. `agent start --parent` sends the parent on the start request.
 
 ## [0.9.1] - 2026-09-16
 
