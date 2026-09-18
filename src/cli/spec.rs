@@ -160,6 +160,22 @@ fn server_command() -> Command {
     Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
+        .subcommand(
+            Command::new("restart")
+                .about("Replace the running local server and keep pane processes")
+                .arg(
+                    path_option("exec", "PATH").help("Absolute path of the herdr binary to import"),
+                )
+                .arg(flag("force").help("Override restart_busy and config preflight")),
+        )
+        .subcommand(
+            Command::new("live-handoff")
+                .about("Hidden alias of server restart")
+                .hide(true)
+                .arg(path_option("import-exe", "PATH"))
+                .arg(option("expected-protocol", "N"))
+                .arg(option("expected-version", "VERSION")),
+        )
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
         .subcommand(
             Command::new("agent-manifests")
@@ -1345,6 +1361,29 @@ mod tests {
         assert!(has_option(pane_split, "direction"));
         assert!(!has_option(pane_split, "split"));
         assert_eq!(option_values(pane_split, "direction"), ["right", "down"]);
+    }
+
+    #[test]
+    fn spec_lists_server_restart_and_hides_live_handoff() {
+        let cmd = super::command();
+        let restart = command_path(&cmd, &["server", "restart"]);
+        let live_handoff = command_path(&cmd, &["server", "live-handoff"]);
+        assert!(!restart.is_hide_set());
+        assert!(live_handoff.is_hide_set());
+        assert!(has_option(restart, "exec"));
+        assert!(has_option(restart, "force"));
+        assert!(!has_option(restart, "import-exe"));
+        assert!(!has_option(restart, "expected-protocol"));
+        assert!(!has_option(restart, "expected-version"));
+        let help = long_help(&["server"]);
+        assert!(
+            help.contains("restart"),
+            "server help should list restart: {help}"
+        );
+        assert!(
+            !help.contains("live-handoff"),
+            "server help should hide live-handoff: {help}"
+        );
     }
 
     #[test]

@@ -245,6 +245,9 @@ pub struct HeadlessServer {
     shutting_down: bool,
     /// Flag set while exporting live PTYs to a replacement server.
     handoff_in_progress: bool,
+    /// After a successful live handoff commit, remaining requests get
+    /// `server_handed_off` instead of `server_unavailable`.
+    handoff_committed: bool,
     /// Imported panes get one app-safe resize nudge after the first client attaches.
     #[cfg(unix)]
     pending_handoff_repaint_nudge: bool,
@@ -374,6 +377,7 @@ impl HeadlessServer {
             effective_size: headless_size,
             shutting_down: false,
             handoff_in_progress: false,
+            handoff_committed: false,
             #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
             should_quit,
@@ -416,6 +420,11 @@ impl HeadlessServer {
 
             // Check if we should start shutting down.
             if self.app.state.should_quit || self.should_quit.load(Ordering::Acquire) {
+                info!(
+                    app_should_quit = self.app.state.should_quit,
+                    atomic_should_quit = self.should_quit.load(Ordering::Acquire),
+                    "initiating shutdown from quit flags"
+                );
                 self.drain_internal_events_with_forwarding_up_to(
                     crate::app::APP_EVENT_CHANNEL_CAPACITY,
                 );
@@ -1139,7 +1148,7 @@ impl HeadlessServer {
 
     async fn reject_late_client_connections(&mut self) {
         self.server_event_rx.close();
-        while let Some(event) = self.server_event_rx.recv().await {
+        while let Ok(event) = self.server_event_rx.try_recv() {
             if let ServerEvent::ClientConnected { writer, .. }
             | ServerEvent::ClientShellConnected { writer, .. } = event
             {
@@ -2907,6 +2916,26 @@ impl HeadlessServer {
         }
     }
 
+    fn reject_queued_api_requests_for_handoff(&mut self) {
+        for _ in 0..self.app.api_rx.len() {
+            let Ok(msg) = self.app.api_rx.try_recv() else {
+                break;
+            };
+            let response = serde_json::to_string(&api::schema::ErrorResponse {
+                id: msg.request.id,
+                error: api::schema::ErrorBody {
+                    code: "server_handed_off".into(),
+                    message: "server handed off to a new process".into(),
+                },
+            })
+            .unwrap_or_else(|_| {
+                r#"{"id":"","error":{"code":"server_handed_off","message":"server handed off to a new process"}}"#
+                    .to_string()
+            });
+            let _ = msg.respond_to.send(response);
+        }
+    }
+
     fn drain_api_requests_with_render_impact(&mut self) -> RenderImpact {
         let mut impact = RenderImpact::None;
         while !self.should_quit.load(Ordering::Acquire) {
@@ -2942,17 +2971,26 @@ impl HeadlessServer {
         skip_default_workspace_for_request: bool,
     ) -> bool {
         if self.shutting_down {
-            // During shutdown, respond with server_unavailable.
+            let (code, message) = if self.handoff_committed {
+                ("server_handed_off", "server handed off to a new process")
+            } else {
+                ("server_unavailable", "server is shutting down")
+            };
             let response = serde_json::to_string(&api::schema::ErrorResponse {
                 id: msg.request.id,
                 error: api::schema::ErrorBody {
-                    code: "server_unavailable".into(),
-                    message: "server is shutting down".into(),
+                    code: code.into(),
+                    message: message.into(),
                 },
             })
             .unwrap_or_else(|_| {
-                r#"{"id":"","error":{"code":"server_unavailable","message":"server is shutting down"}}"#
-                    .to_string()
+                if self.handoff_committed {
+                    r#"{"id":"","error":{"code":"server_handed_off","message":"server handed off to a new process"}}"#
+                        .to_string()
+                } else {
+                    r#"{"id":"","error":{"code":"server_unavailable","message":"server is shutting down"}}"#
+                        .to_string()
+                }
             });
             let _ = msg.respond_to.send(response);
             return false;
@@ -2975,6 +3013,15 @@ impl HeadlessServer {
         let stream_active = msg.stream_active.clone();
 
         if let api::schema::Method::ServerLiveHandoff(params) = &msg.request.method {
+            if let Some((code, message)) = self.live_handoff_refusal(params) {
+                let response = serde_json::to_string(&api::schema::ErrorResponse {
+                    id: msg.request.id.clone(),
+                    error: api::schema::ErrorBody { code, message },
+                })
+                .unwrap_or_else(|_| "{}".to_string());
+                let _ = msg.respond_to.send(response);
+                return true;
+            }
             let handoff_result = self.perform_live_handoff(params.clone());
             let handoff_succeeded = handoff_result.is_ok();
             let response = match handoff_result {
@@ -2993,6 +3040,9 @@ impl HeadlessServer {
             .unwrap_or_else(|_| "{}".to_string());
             let _ = msg.respond_to.send(response);
             if handoff_succeeded {
+                self.handoff_committed = true;
+                self.mark_server_handed_off();
+                self.reject_queued_api_requests_for_handoff();
                 wait_for_live_handoff_response_write(msg.response_write_complete);
                 self.finish_live_handoff_shutdown();
             }
@@ -3465,11 +3515,30 @@ impl Drop for HeadlessServer {
 /// the event loop by sending a QuitSignal on the server event channel.
 fn ctrlc_handler(should_quit: Arc<AtomicBool>, server_event_tx: mpsc::Sender<ServerEvent>) {
     let _ = ctrlc::set_handler(move || {
+        info!("received termination signal; requesting shutdown");
         should_quit.store(true, Ordering::Release);
         // Wake up the event loop so the quit flag is checked promptly.
         let _ = server_event_tx.try_send(ServerEvent::QuitSignal);
     });
+    // ctrlc's `termination` feature treats SIGHUP as quit. A replacement
+    // server is a session leader after setsid; SIGHUP from a dying source
+    // must not stop it. SIGINT and SIGTERM still request a graceful stop.
+    if crate::platform::current_process_is_detached_server_daemon() {
+        ignore_sighup_for_detached_daemon();
+    }
 }
+
+#[cfg(unix)]
+fn ignore_sighup_for_detached_daemon() {
+    // Safety: ignoring SIGHUP is process-wide and is the normal policy for a
+    // detached server daemon that has no controlling terminal.
+    unsafe {
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+    }
+}
+
+#[cfg(not(unix))]
+fn ignore_sighup_for_detached_daemon() {}
 
 /// Sleep until a deadline, or return pending if none.
 async fn sleep_until_or_pending(deadline: Option<Instant>) {

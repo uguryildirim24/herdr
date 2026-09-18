@@ -3956,6 +3956,10 @@
                 "null"
               ]
             },
+            "force": {
+              "description": "Optional JSON field. Older clients omit it; default is false.",
+              "type": "boolean"
+            },
             "import_exe": {
               "type": [
                 "string",

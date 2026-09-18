@@ -256,10 +256,13 @@ fn validate_machine_command(args: &[String]) -> Result<(), String> {
             subcommand,
             "link" | "unlink" | "enable" | "disable" | "list" | "action" | "log" | "logs" | "pane"
         ),
-        "server" => matches!(
-            subcommand,
-            "stop" | "reload-config" | "agent-manifests" | "reload-agent-manifests"
-        ),
+        "server" => match subcommand {
+            "restart" | "live-handoff" => {
+                return Err("server restart is local-only".into());
+            }
+            "stop" | "reload-config" | "agent-manifests" | "reload-agent-manifests" => true,
+            _ => false,
+        },
         _ => false,
     };
     if supported {
@@ -396,6 +399,7 @@ mod tests {
             &["machine", "remove", "mac"],
             &["session", "delete", "default"],
             &["server", "live-handoff"],
+            &["server", "restart"],
             &["agent", "attach", "w4:p1"],
             &["terminal", "attach", "w4:p1"],
             &["terminal", "session", "control", "w4:p1"],
@@ -421,6 +425,18 @@ mod tests {
             let mut input = args(&["herdr"]);
             input.extend(args(command));
             assert!(validate_machine_command(&input).is_ok(), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn machine_commands_refuse_server_restart_as_local_only() {
+        for command in [&["server", "restart"][..], &["server", "live-handoff"]] {
+            let mut input = args(&["herdr"]);
+            input.extend(args(command));
+            assert_eq!(
+                validate_machine_command(&input).unwrap_err(),
+                "server restart is local-only"
+            );
         }
     }
 }
