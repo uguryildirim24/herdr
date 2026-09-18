@@ -258,6 +258,13 @@ impl App {
             Ok(tokens) => tokens,
             Err(message) => return encode_error(id, "invalid_metadata_token", message),
         };
+        if tokens.contains_key(crate::app::agent_parents::PARENT_TOKEN) {
+            return encode_error(
+                id,
+                "invalid_metadata_token",
+                "parent is a pane-only metadata token",
+            );
+        };
         let Some(workspace) = self.state.workspaces.get_mut(index) else {
             return workspace_not_found(id, &params.workspace_id);
         };
@@ -848,6 +855,50 @@ mod tests {
             &event.data,
             EventData::WorkspaceMetadataUpdated { workspace } if workspace.tokens.is_empty()
         )));
+    }
+
+    #[test]
+    fn workspace_parent_token_is_reserved() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        let workspace_id = app.public_workspace_id(0);
+        let response = app.handle_workspace_report_metadata(
+            "req".into(),
+            WorkspaceReportMetadataParams {
+                workspace_id: workspace_id.clone(),
+                source: "user:test".into(),
+                tokens: std::collections::HashMap::from([("parent".into(), Some("w1:p1".into()))]),
+                seq: None,
+                ttl_ms: None,
+            },
+        );
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_metadata_token");
+        assert!(app.workspace_info(0).tokens.is_empty());
+
+        let response = app.handle_workspace_report_metadata(
+            "req".into(),
+            WorkspaceReportMetadataParams {
+                workspace_id,
+                source: "user:test".into(),
+                tokens: std::collections::HashMap::from([
+                    ("round".into(), Some("r2".into())),
+                    ("parent".into(), Some("w1:p1".into())),
+                ]),
+                seq: None,
+                ttl_ms: None,
+            },
+        );
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_metadata_token");
+        assert!(app.workspace_info(0).tokens.is_empty());
     }
 
     #[test]
