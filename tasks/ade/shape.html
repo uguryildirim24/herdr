@@ -1,0 +1,579 @@
+<title>Native ADE</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --base: #EFF1F5;
+    --surface: #E6E9EF;
+    --surface-2: #DCE0E8;
+    --line: #BCC0CC;
+    --text: #4C4F69;
+    --muted: #6C6F85;
+    --mauve: #8839EF;
+    --green: #40A02B;
+    --yellow: #DF8E1D;
+    --red: #D20F39;
+    --peach: #FE640B;
+    --code-bg: #E6E9EF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --base: #1E1E2E;
+      --surface: #313244;
+      --surface-2: #45475A;
+      --line: #585B70;
+      --text: #CDD6F4;
+      --muted: #A6ADC8;
+      --mauve: #CBA6F7;
+      --green: #A6E3A1;
+      --yellow: #F9E2AF;
+      --red: #F38BA8;
+      --peach: #FAB387;
+      --code-bg: #181825;
+    }
+  }
+  :root[data-theme="dark"] {
+    --base: #1E1E2E;
+    --surface: #313244;
+    --surface-2: #45475A;
+    --line: #585B70;
+    --text: #CDD6F4;
+    --muted: #A6ADC8;
+    --mauve: #CBA6F7;
+    --green: #A6E3A1;
+    --yellow: #F9E2AF;
+    --red: #F38BA8;
+    --peach: #FAB387;
+    --code-bg: #181825;
+  }
+  body {
+    background: var(--base);
+    color: var(--text);
+    font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    padding-block: 40px 80px;
+    padding-inline: 20px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .prose { max-width: 68ch; }
+  code, pre, .mono {
+    font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.5;
+    margin: 0;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 40px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 19px;
+    line-height: 1.45;
+    color: var(--text);
+    margin: 0 0 12px;
+    max-width: 60ch;
+  }
+  h2 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 56px 0 14px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 26px 0 6px;
+  }
+  p { margin: 0 0 14px; }
+  .layer-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin: 18px 0 6px;
+  }
+  .layer {
+    background: var(--surface);
+    border-left: 3px solid var(--mauve);
+    padding: 14px 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .layer .k {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .layer .t { font-weight: 600; font-size: 17px; }
+  .layer p { margin: 0; font-size: 14.5px; color: var(--text); }
+  .layer ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+  .layer li code { font-size: 12.5px; }
+  .figure {
+    margin: 22px 0 8px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .figure svg {
+    display: block;
+    width: 100%;
+    min-width: 760px;
+    max-width: 100%;
+    height: auto;
+  }
+  .figcap { font-size: 13.5px; color: var(--muted); margin: 6px 0 0; max-width: 68ch; }
+  .box { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .box-strong { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+  .box-accent { fill: var(--surface); stroke: var(--mauve); stroke-width: 1.5; }
+  .ttl { font-family: "IBM Plex Sans", sans-serif; font-weight: 600; font-size: 14px; fill: var(--text); }
+  .lbl { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.06em; fill: var(--muted); }
+  .txt { font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; fill: var(--text); }
+  .mono-t { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; fill: var(--text); }
+  .mono-m { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; fill: var(--muted); }
+  .edge { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+  .edge-accent { stroke: var(--mauve); stroke-width: 1.4; fill: none; }
+  .arrow { fill: var(--muted); }
+  .arrow-accent { fill: var(--mauve); }
+  .st-done { fill: var(--green); }
+  .st-work { fill: var(--mauve); }
+  .st-wait { fill: var(--yellow); }
+  .st-block { fill: var(--red); }
+  .st-shell { fill: var(--muted); }
+  .tree { fill: var(--line); }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14.5px;
+    margin: 14px 0 6px;
+  }
+  .tablewrap { overflow-x: auto; }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 9px 12px 9px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+  .qs { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 0; counter-reset: q; }
+  .qs li {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 12px;
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+  }
+  .qs li:last-child { border-bottom: 1px solid var(--line); }
+  .qs .n {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    color: var(--mauve);
+    font-variant-numeric: tabular-nums;
+    padding-top: 2px;
+  }
+  .qs .q { font-weight: 600; margin: 0 0 6px; }
+  .qs .a { margin: 0; font-size: 14.5px; color: var(--text); }
+  .qs .a b { font-weight: 600; color: var(--mauve); }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 14px 0 0; }
+  .step { background: var(--surface); padding: 12px 14px; font-size: 14px; }
+  .step .k { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+  .step .s { font-weight: 600; display: block; margin-bottom: 4px; }
+  .chip { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; padding: 1px 7px; border-radius: 3px; background: var(--surface-2); color: var(--text); }
+  .chip.live { color: var(--mauve); }
+  .chip.done { color: var(--green); }
+  .ans { margin-top: 10px; display: grid; gap: 4px; }
+  .ans label { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+  .ans label .st { text-transform: none; letter-spacing: 0; color: var(--green); }
+  .ans textarea { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; font: inherit; font-size: 14.5px; line-height: 1.45; color: var(--text); background: var(--base); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; }
+  .ans textarea:focus-visible { outline: 2px solid var(--mauve); outline-offset: 1px; border-color: var(--mauve); }
+  .lesson { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0 0; }
+  .lesson > div { background: var(--surface); padding: 12px 14px; font-size: 14.5px; }
+  .lesson .k { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 6px; }
+  .lesson ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+  .foot { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
+  a { color: var(--mauve); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--mauve); outline-offset: 2px; }
+  @media (max-width: 640px) {
+    h1 { font-size: 32px; }
+    .layer-grid, .steps { grid-template-columns: 1fr; }
+    .qs li { grid-template-columns: 34px 1fr; }
+    .lesson { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">herdr fork · design note · 2026-09-18 · round 3 proposal</p>
+  <h1>Native ADE</h1>
+  <p class="lede">Take the coordination knowledge out of my Claude skills and memory, put it into your herdr, and hand it to whichever agent sits in a pane. Any provider, one source of truth, nothing to remember.</p>
+  <p class="prose">Today the round-table protocol lives in three Claude skills, a Python script and six of my memory notes. A Codex, Cursor or OpenCode coordinator starts blind. The fork already has the two bones this needs: the <code>herdr --skill</code> text is compiled into the binary, and herdr installs its own session hook into eight agent CLIs. This page is the shape I want to build on that. The open questions at the end are yours; answer by number.</p>
+
+  <h2>Three layers, all inside the binary</h2>
+  <div class="layer-grid">
+    <div class="layer">
+      <span class="k">01 · knowledge</span>
+      <span class="t">The text ships with herdr</span>
+      <p>Topics compiled from <code>docs/ade/*.md</code> in the fork. Your standing rules live in one file herdr appends at the end, so changing a model pick needs no rebuild.</p>
+      <ul>
+        <li><code>herdr --skill</code> upstream base, unchanged</li>
+        <li><code>herdr --skill coordinate</code> the round table</li>
+        <li><code>herdr --skill resume</code> pick it up cold</li>
+        <li><code>~/.config/herdr/ade.local.md</code> your rules</li>
+      </ul>
+    </div>
+    <div class="layer">
+      <span class="k">02 · delivery</span>
+      <span class="t">herdr hands it over, per provider</span>
+      <p>The agent never has to know to ask. Three channels, picked by what the CLI in the pane supports.</p>
+      <ul>
+        <li><b>Hook</b>: the herdr-installed session hook injects the bootstrap at start (claude, codex, cursor, copilot, agy, devin, droid, qoder already have one)</li>
+        <li><b>Typed</b>: <code>herdr agent start --role …</code> types the bootstrap as the first prompt (chatgpt, dsh, anything hookless)</li>
+        <li><b>Fallback</b>: any agent can be told to run <code>herdr --skill coordinate</code></li>
+      </ul>
+    </div>
+    <div class="layer">
+      <span class="k">03 · operations</span>
+      <span class="t">The procedures become commands</span>
+      <p>What every coordinator and lane copies by hand today, as one verb each. Roles map to a kind and flags in config.</p>
+      <ul>
+        <li><code>herdr lane start w2 --role lane --brief tasks/w2.md</code></li>
+        <li><code>herdr lane done w2 --report … --sha …</code></li>
+        <li><code>herdr lane waiting w2 "cloud job"</code></li>
+        <li><code>herdr ade checkpoint</code> · <code>herdr ade resume</code></li>
+        <li><code>[ade.roles]</code> coordinator · lane · reviewer · critic</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="figure">
+    <svg viewBox="0 0 960 470" role="img" aria-label="Diagram: the herdr binary on the left with three stacked layers, knowledge, delivery and operations, feeding agent panes on the right drawn as the herdr sidebar tree, with signal lines returning to the coordinator.">
+      <!-- left: the binary -->
+      <rect x="20" y="24" width="400" height="420" rx="6" class="box-strong"></rect>
+      <text x="36" y="48" class="lbl">HERDR · YOUR FORK · ~/.local/bin/herdr</text>
+
+      <rect x="36" y="64" width="368" height="104" rx="4" class="box"></rect>
+      <text x="50" y="86" class="ttl">Knowledge</text>
+      <text x="50" y="108" class="mono-t">--skill coordinate · --skill resume</text>
+      <text x="50" y="128" class="mono-m">compiled from docs/ade/*.md</text>
+      <text x="50" y="148" class="mono-m">+ ~/.config/herdr/ade.local.md (your rules)</text>
+
+      <rect x="36" y="192" width="368" height="104" rx="4" class="box"></rect>
+      <text x="50" y="214" class="ttl">Delivery</text>
+      <text x="50" y="236" class="mono-t">session hook · typed bootstrap · --skill</text>
+      <text x="50" y="256" class="mono-m">one adapter per agent kind</text>
+      <text x="50" y="276" class="mono-m">claude codex cursor agy opencode chatgpt dsh …</text>
+
+      <rect x="36" y="320" width="368" height="104" rx="4" class="box"></rect>
+      <text x="50" y="342" class="ttl">Operations</text>
+      <text x="50" y="364" class="mono-t">lane start · lane done · lane waiting</text>
+      <text x="50" y="384" class="mono-t">ade checkpoint · ade resume · ade roles</text>
+      <text x="50" y="404" class="mono-m">[ade.roles] role → kind + flags</text>
+
+      <!-- inner arrows knowledge -> delivery -> operations -->
+      <line x1="220" y1="168" x2="220" y2="188" class="edge"></line>
+      <polygon points="216,186 224,186 220,192" class="arrow"></polygon>
+      <line x1="220" y1="296" x2="220" y2="316" class="edge"></line>
+      <polygon points="216,314 224,314 220,320" class="arrow"></polygon>
+
+      <!-- right: the panes -->
+      <rect x="540" y="24" width="400" height="300" rx="6" class="box-strong"></rect>
+      <text x="556" y="48" class="lbl">AGENTS PANEL · ANY PANE, ANY PROVIDER</text>
+
+      <rect x="556" y="64" width="368" height="244" rx="4" class="box"></rect>
+      <!-- tree rows -->
+      <text x="572" y="92" class="mono-t">▾ hcoord</text>
+      <text x="700" y="92" class="mono-m">claude</text>
+      <text x="780" y="92" class="mono-m">coordinator</text>
+
+      <text x="572" y="122" class="tree mono-t">├</text>
+      <text x="590" y="122" class="mono-t">rebase</text>
+      <text x="700" y="122" class="mono-m">cursor</text>
+      <circle cx="786" cy="118" r="4" class="st-done"></circle>
+      <text x="796" y="122" class="mono-m">done</text>
+
+      <text x="572" y="152" class="tree mono-t">├</text>
+      <text x="590" y="152" class="mono-t">reviewer</text>
+      <text x="700" y="152" class="mono-m">cursor</text>
+      <circle cx="786" cy="148" r="4" class="st-work"></circle>
+      <text x="796" y="152" class="mono-m">working</text>
+
+      <text x="572" y="182" class="tree mono-t">├</text>
+      <text x="590" y="182" class="mono-t">spec-durable</text>
+      <text x="700" y="182" class="mono-m">codex</text>
+      <circle cx="786" cy="178" r="4" class="st-wait"></circle>
+      <text x="796" y="182" class="mono-m">waiting</text>
+
+      <text x="572" y="212" class="tree mono-t">├</text>
+      <text x="590" y="212" class="mono-t">pro</text>
+      <text x="700" y="212" class="mono-m">chatgpt</text>
+      <circle cx="786" cy="208" r="4" class="st-block"></circle>
+      <text x="796" y="212" class="mono-m">blocked</text>
+
+      <text x="572" y="242" class="tree mono-t">└</text>
+      <text x="590" y="242" class="mono-t">watch</text>
+      <text x="700" y="242" class="mono-m">shell</text>
+      <circle cx="786" cy="238" r="4" class="st-shell"></circle>
+      <text x="796" y="242" class="mono-m">pane</text>
+
+      <text x="572" y="284" class="mono-m">every row above already carries the bootstrap</text>
+      <text x="572" y="300" class="mono-m">before you type "you are the coordinator"</text>
+
+      <!-- delivery -> panes -->
+      <path d="M 404 244 C 470 244, 470 150, 540 150" class="edge-accent"></path>
+      <polygon points="534,145 534,155 542,150" class="arrow-accent"></polygon>
+      <text x="418" y="196" class="lbl">INJECT</text>
+
+      <!-- operations -> panes -->
+      <path d="M 404 372 C 470 372, 470 230, 540 230" class="edge-accent"></path>
+      <polygon points="534,225 534,235 542,230" class="arrow-accent"></polygon>
+      <text x="418" y="330" class="lbl">START · LINK · PROMPT</text>
+
+      <!-- signals back -->
+      <rect x="540" y="348" width="400" height="96" rx="6" class="box-accent"></rect>
+      <text x="556" y="372" class="lbl">PUSHED INTO THE COORDINATOR PANE</text>
+      <text x="556" y="396" class="mono-t">DONE &lt;pkg&gt; &lt;report&gt; &lt;sha&gt;   WAITING &lt;pkg&gt; &lt;what&gt;</text>
+      <text x="556" y="416" class="mono-t">BLOCKED &lt;lane&gt;   GONE &lt;lane&gt;</text>
+      <text x="556" y="434" class="mono-m">lanes push the first two; the server pushes the rest</text>
+
+      <path d="M 740 324 L 740 348" class="edge"></path>
+      <polygon points="736,346 744,346 740,352" class="arrow"></polygon>
+      <path d="M 540 396 C 470 396, 470 410, 404 410" class="edge"></path>
+      <polygon points="410,405 410,415 402,410" class="arrow"></polygon>
+    </svg>
+    <p class="figcap">Left: the fork binary with the three layers. Right: the agents panel as it looks in a round, every row nested under the coordinator with the fork's parent links. The signal vocabulary stays exactly what lanes and the server push today; the commands only stop people retyping it.</p>
+  </div>
+
+  <h2>What goes away, and what replaces it</h2>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Today</th><th class="num">Lines</th><th>Becomes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>~/.claude/skills/round-table/SKILL.md</code></td><td class="num">374</td><td><code>herdr --skill coordinate</code>, injected at start</td></tr>
+        <tr><td><code>~/.claude/skills/save-state/SKILL.md</code> and <code>state.py</code></td><td class="num">695</td><td><code>herdr ade checkpoint</code>, <code>herdr ade resume</code>, <code>herdr --skill resume</code></td></tr>
+        <tr><td><code>~/.claude/skills/herdr/SKILL.md</code></td><td class="num">214</td><td><code>herdr --skill</code>, which it already copies</td></tr>
+        <tr><td>Six memory notes: signals, model picks, gotchas, permissions, isolation, save-state</td><td class="num">~180</td><td><code>ade.local.md</code> for your rules, <code>[ade.roles]</code> for model picks, the gotchas folded into the topic text</td></tr>
+        <tr><td>The three closing lines every worker copies from its brief</td><td class="num">3</td><td><code>herdr lane done</code> and <code>herdr lane waiting</code></td></tr>
+        <tr><td>The herdr-installed Claude SessionStart hook, reporting state only</td><td class="num">1</td><td>The same hook, now also injecting the bootstrap. Its siblings for the other seven CLIs do the same.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">Rolf-specific rules never enter the fork's git history. The compiled text is the protocol; your file is the policy on top of it, and the roles table is where "use x for y" is written down once and read by every coordinator.</p>
+
+  <h2>A day with it</h2>
+  <p class="prose">You open a Codex pane, or Cursor, or OpenCode, and say "you are the coordinator, spec first, grok xhigh for lanes". The pane already carries the bootstrap, so the agent runs <code>herdr --skill coordinate</code>, reads the roles table, and sees that lanes are Cursor grok xhigh with <code>--force</code> and that Opus lanes start at effort high. It names itself, marks the round, writes the spec brief, and starts a drafting lane with one command. Lanes end their turns with <code>herdr lane done</code>. The server pushes BLOCKED and GONE. At every merge the coordinator runs <code>herdr ade checkpoint</code>, and after round 2 lands, <code>herdr server restart</code> keeps every pane, turn and link, so <code>herdr ade resume</code> is only for a cold start.</p>
+
+  <h2>Where it sits in the rounds</h2>
+  <div class="steps">
+    <div class="step"><span class="k">round 1</span><span class="s">Rebase onto v0.9.1</span>Lane done, reviewer running. <span class="chip live">in progress</span></div>
+    <div class="step"><span class="k">round 2</span><span class="s">Durable ADE</span>Live-handoff restart, persisted lane tree, cycle refusal, resume. Spec drafting now. <span class="chip live">spec</span></div>
+    <div class="step"><span class="k">round 3</span><span class="s">Native ADE</span>This page, as a spec first, then two or three lanes on the rebased, durable base. <span class="chip">next</span></div>
+  </div>
+
+  <h2>What herdr-projects already proves</h2>
+  <p class="prose">You pointed me at <a href="https://github.com/eliasstravik/herdr-projects">eliasstravik/herdr-projects</a>: a herdr plugin, Rust, MIT, public since this morning, built for herdr 0.9.1 and up. It is the round table as a product. One coordinator conversation, a thread per task on its own worktree and branch, every brief carrying the same standing instructions and memory, reports whose <code>## Remember</code> section flows back into memory, a sidebar grouped by what needs you, an inbox fed by a background ticker, adopting a pane you already started, restarting a thread whose pane is gone, threads on your saved SSH machines, pull request follow-up, and a doctor command. Its builder verified herdr's behaviour in seven recorded stages on macOS and Linux.</p>
+  <div class="lesson">
+    <div>
+      <span class="k">what it teaches the shape</span>
+      <ul>
+        <li><b>Files are the record, prompts are nudges.</b> The coordinator runs <code>context</code> at the start of every turn and re-reads state from the binary. A missed prompt loses nothing. Our DONE line typed into a pane is lost if it lands during a restart or a compaction.</li>
+        <li><b>The skill is 95 lines</b> because state lives in the binary, not in the agent's memory. Delivery is a priming message with the command prefix, typed into the pane, so any CLI herdr can start works.</li>
+        <li><b>Data is not instructions.</b> Reports, inbox items and command output never count as a go-ahead. The round table has no such rule yet.</li>
+        <li><b>Verified gotchas.</b> A prompt sent while you type merges with your half-typed text and submits it, so nudges are off by default. Pane ids restart at w1 after a cold restart. The agent view filter is socket-only. Worktrees under <code>~/.herdr</code> trigger Claude's trust dialog. A server not started from a login shell gives plugins a minimal PATH.</li>
+      </ul>
+    </div>
+    <div>
+      <span class="k">what it lacks against the round table</span>
+      <ul>
+        <li>One fresh reviewer per round on a merged candidate, gates, and the two-model spec dialogue.</li>
+        <li>Briefs and verdicts as committed files in the repo. It keeps records in <code>~/.herdr-projects</code>.</li>
+        <li>A roles table: thread agent is one setting, <code>thread_agent</code>, with a per-thread <code>--agent</code> override and no model or flags per role.</li>
+        <li>Your fork's parent nesting. It groups by <code>project</code>, <code>thread</code> and <code>rank</code> tokens plus a sidebar view filter.</li>
+        <li>GPT-6 Pro through pro-mcp, and the DONE and WAITING pushes. It watches reports and state with a ticker instead.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Open questions</h2>
+  <p class="prose">Each one changes what gets built. My recommendation is in bold; say the number and a word if you agree.</p>
+  <ol class="qs">
+    <li>
+      <span class="n">1</span>
+      <div>
+        <p class="q">How much text goes into every pane at start?</p>
+        <p class="a">The full coordinate topic is 300 to 400 lines. Injecting it into every lane costs each worker context it never uses. <b>Recommendation:</b> a ten-line bootstrap in every agent pane ("you are inside herdr, pane w1F:p2; if you are told you coordinate, run <code>herdr --skill coordinate</code> first; if you are a lane, end every turn with <code>herdr lane done</code> or <code>herdr lane waiting</code>"), and the full topic only when a pane starts with <code>--role coordinator</code> or the agent asks for it.</p>
+        <div class="ans">
+          <label for="ans-1">Your answer <span class="st" id="st-1"></span></label>
+          <textarea id="ans-1" data-q="1" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">2</span>
+      <div>
+        <p class="q">Where does the protocol text live: compiled in, or files herdr reads?</p>
+        <p class="a">Compiled in means the text is versioned with the fork and changes need a rebuild. Files under <code>~/.config/herdr/ade/</code> can be edited live but drift from the repo. <b>Recommendation:</b> compiled defaults from <code>docs/ade/</code>, one local override file for your rules, and a <code>herdr ade doctor</code> that says which is in effect.</p>
+        <div class="ans">
+          <label for="ans-2">Your answer <span class="st" id="st-2"></span></label>
+          <textarea id="ans-2" data-q="2" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">3</span>
+      <div>
+        <p class="q">Which roles, and what are the day-one defaults?</p>
+        <p class="a"><b>Recommendation:</b> coordinator, lane, reviewer, critic, drafter, pro. Day one from your standing rules: lane, reviewer, critic and drafter are <code>cursor -- --model cursor-grok-4.6-xhigh --force</code>; any Claude Opus role adds <code>--effort high</code>; pro is <code>chatgpt</code> through pro-mcp. Coordinator has no default kind; it is whoever you open.</p>
+        <div class="ans">
+          <label for="ans-3">Your answer <span class="st" id="st-3"></span></label>
+          <textarea id="ans-3" data-q="3" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">4</span>
+      <div>
+        <p class="q">Which CLIs are first-class on day one for injection at start?</p>
+        <p class="a">Each one is an adapter to write and test. <b>Recommendation:</b> claude, cursor, codex, opencode and agy through their hooks or rules; chatgpt, dsh and Grok Bot through the typed bootstrap. Copilot, devin, droid and qoder wait until you use them.</p>
+        <div class="ans">
+          <label for="ans-4">Your answer <span class="st" id="st-4"></span></label>
+          <textarea id="ans-4" data-q="4" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">5</span>
+      <div>
+        <p class="q">Do the signal lines stay as typed prompts, or become structured events too?</p>
+        <p class="a">Today a lane types <code>DONE …</code> into the coordinator pane and that line is the record. <b>Recommendation:</b> keep the line exactly as it is so every coordinator reads the same thing, and have <code>herdr lane done</code> also stamp the pane tokens and the checkpoint file, so the record survives even if the line is missed.</p>
+        <div class="ans">
+          <label for="ans-5">Your answer <span class="st" id="st-5"></span></label>
+          <textarea id="ans-5" data-q="5" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">6</span>
+      <div>
+        <p class="q">Delete the skills and my memory notes when round 3 merges?</p>
+        <p class="a">Once the topics are in the binary, the Claude skills and six memory notes are duplicates that will drift. <b>Recommendation:</b> yes. At the merge I remove the three skill directories and the notes, and leave one memory line: the protocol is <code>herdr --skill coordinate</code>.</p>
+        <div class="ans">
+          <label for="ans-6">Your answer <span class="st" id="st-6"></span></label>
+          <textarea id="ans-6" data-q="6" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">7</span>
+      <div>
+        <p class="q">Who attacks this spec?</p>
+        <p class="a">The durability spec got Claude Opus at effort high as its attacker, because the round table wants two different models and the drafter is grok. Your usual pair for specs is a lane drafting and GPT-6 Pro attacking from ChatGPT. <b>Recommendation:</b> Pro on this one, since it is a contract that will be hard to change once shipped. Say "pro", "opus" or "grok".</p>
+        <div class="ans">
+          <label for="ans-7">Your answer <span class="st" id="st-7"></span></label>
+          <textarea id="ans-7" data-q="7" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">8</span>
+      <div>
+        <p class="q">Command naming: one <code>herdr ade</code> namespace, or verbs under existing nouns?</p>
+        <p class="a">Upstream has <code>herdr agent</code>, <code>herdr pane</code>, <code>herdr workspace</code>. <b>Recommendation:</b> <code>herdr lane</code> for the lane lifecycle (start, done, waiting, close) because a lane is more than an agent, and <code>herdr ade</code> for the coordinator's tools (checkpoint, resume, roles, doctor). Nothing under <code>herdr agent</code> changes, so upstream rebases stay cheap.</p>
+        <div class="ans">
+          <label for="ans-8">Your answer <span class="st" id="st-8"></span></label>
+          <textarea id="ans-8" data-q="8" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+    <li>
+      <span class="n">9</span>
+      <div>
+        <p class="q">Native in the fork, a plugin on top of it, or herdr-projects adopted as is?</p>
+        <p class="a">Three ways. <b>Adopt</b> herdr-projects unchanged and write the round table into its <code>PROJECT.md</code> instructions and memory: fastest, but the reviewer round, gates, roles and your nesting stay conventions. <b>Native</b> in the fork as this page describes: every rebase carries it. <b>Plugin</b>: fork herdr-projects into <code>herdr-ade</code> on top of your herdr, keep its ticker, inbox, context digest, adopt, restart and remote threads, and add roles, rounds with one reviewer, gates, parent tokens and Pro. <b>Recommendation:</b> the plugin. The fork's own diff stays nesting plus durability, which rebases cheaply, and the coordination layer lives where herdr already expects it. The protocol text still ships as <code>herdr --skill coordinate</code>, printed by the plugin.</p>
+        <div class="ans">
+          <label for="ans-9">Your answer <span class="st" id="st-9"></span></label>
+          <textarea id="ans-9" data-q="9" placeholder="Type here. It saves by itself."></textarea>
+        </div>
+      </div>
+    </li>
+  </ol>
+
+  <p class="foot">Written by Claude as coordinator in pane w1F:p1, 2026-09-18. Round 1 reviewer and the durability spec lane were running when this was published. Source of the numbers: the skill files under ~/.claude/skills and the fork at ~/projects/herdr on lane/rebase.</p>
+</div>
+
+<script>
+(async () => {
+  const boxes = Array.from(document.querySelectorAll('textarea[data-q]'));
+  const status = (q, t) => { const el = document.getElementById('st-' + q); if (el) el.textContent = t; };
+  let db = null;
+  try { db = await (window.claude && window.claude.use ? window.claude.use('db') : null); } catch (e) { db = null; }
+  if (!db) { boxes.forEach(b => status(b.dataset.q, 'not saved here')); return; }
+  const ref = db.doc('answers/native-ade');
+  let current = {};
+  const dirty = new Set();
+  ref.onSnapshot(snap => {
+    const d = snap.exists ? (snap.data() || {}) : {};
+    current = Object.assign({}, d);
+    boxes.forEach(b => {
+      const q = b.dataset.q;
+      if (dirty.has(q) || document.activeElement === b) return;
+      const v = typeof d['q' + q] === 'string' ? d['q' + q] : '';
+      if (b.value !== v) b.value = v;
+      status(q, v ? 'saved' : '');
+    });
+  }, () => boxes.forEach(b => status(b.dataset.q, 'saving unavailable')));
+  let chain = Promise.resolve();
+  const timers = {};
+  boxes.forEach(b => {
+    const q = b.dataset.q;
+    b.addEventListener('input', () => {
+      dirty.add(q); status(q, 'typing');
+      clearTimeout(timers[q]);
+      timers[q] = setTimeout(() => {
+        const value = b.value;
+        chain = chain.then(async () => {
+          if ((current['q' + q] || '') === value) { dirty.delete(q); status(q, value ? 'saved' : ''); return; }
+          const next = Object.assign({}, current, { ['q' + q]: value, updatedAt: new Date().toISOString() });
+          try { await ref.set(next); current = next; dirty.delete(q); status(q, 'saved'); }
+          catch (e) { status(q, 'not saved: ' + ((e && e.code) || 'error')); }
+        });
+      }, 800);
+    });
+  });
+})();
+</script>
