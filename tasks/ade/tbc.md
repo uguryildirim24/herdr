@@ -29,3 +29,23 @@ The Codex bridge Rolf already runs (`127.0.0.1:17841`, from miuuyy/codex-chatgpt
 its own streaming path to ChatGPT; pro-mcp should use that instead of the browser stream.
 This touches pro-mcp and the `chatgpt` agent kind's state detection in the fork, not the
 plugin. Not before the ADE round; no troubleshooting of the current setup meanwhile.
+
+## TBC-3: cloud sessions for the CLIs that have them
+
+Rolf, 2026-09-18: "we also have to solve cloud session integration for CLIs that
+support it, because when I'm running 4 spaces running their own lanes" (the message was
+cut off there; the meaning: four builds with their lanes on one Mac is too much load).
+
+Plain: some agent CLIs can run a session on their vendor's cloud instead of on this
+machine (Claude Code cloud sessions today; others as they appear). A lane that runs in
+the cloud costs this Mac nothing. What is known (memory, 2026-09-18, Claude Code
+2.1.269): a cloud session cannot be attached as an interactive terminal; only
+print-mode follow-ups and a teleport exist; cloud workers are not visible in herdr, so
+builds stayed local. In the ADE this becomes a role kind `claude-cloud` (and siblings)
+in the roles table: `thread start` launches the cloud session, the ticker polls its
+state and mirrors it into a pane's tokens so the board and the lane tree show it, the
+DONE push arrives through the plugin's inbox instead of a typed line, and the worktree
+stays local (the cloud session works on a branch it pushes). Needs a per-CLI adapter and
+a re-check of what each CLI's cloud mode allows at the time of building. Not in the
+first plugin round.
+
