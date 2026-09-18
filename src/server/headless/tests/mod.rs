@@ -5267,6 +5267,45 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
     shutdown_test_runtimes(&mut server);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_pty_dirty_render_does_not_reset_pending_agent_resume_deadline() {
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("restored");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.ensure_test_terminals();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .expect("test terminal should exist")
+        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        agent: "codex".into(),
+        argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
+        dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+    });
+
+    server.render_and_stream();
+    let now = Instant::now();
+    assert!(!server.handle_scheduled_tasks_headless(now, false));
+    let deadline = server
+        .app
+        .pending_agent_resume_deadline
+        .expect("clientless resume should wait briefly for a host theme");
+
+    assert!(!server.handle_scheduled_tasks_headless(now + Duration::from_millis(10), true));
+    assert_eq!(server.app.pending_agent_resume_deadline, Some(deadline));
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+
+    assert!(server.handle_scheduled_tasks_headless(deadline, true));
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+    shutdown_test_runtimes(&mut server);
+}
+
 #[test]
 fn terminal_attach_resize_uses_known_cell_geometry_without_pixel_mouse() {
     with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {

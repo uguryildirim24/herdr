@@ -769,10 +769,11 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
 pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {
     let client = target::api_client()?;
     ensure_server_protocol_compatible(&client, &request.id)?;
-    let value = client
-        .request_value(request)
-        .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))?;
-    retry_after_server_handed_off(request, value)
+    match client.request_value(request) {
+        Ok(value) => retry_after_server_handed_off(request, value),
+        Err(ApiClientError::EmptyResponse) => retry_after_empty_handoff_response(request),
+        Err(err) => Err(map_server_not_running_or_io(err, &request.id, &client)),
+    }
 }
 
 pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {
@@ -794,6 +795,10 @@ fn retry_after_server_handed_off(
     {
         return Ok(value);
     }
+    retry_after_empty_handoff_response(request)
+}
+
+fn retry_after_empty_handoff_response(request: &Request) -> std::io::Result<serde_json::Value> {
     wait_for_handoff_successor(&request.id)?;
     let retry = retry_request_after_handoff(request);
     let client = target::api_client()?;

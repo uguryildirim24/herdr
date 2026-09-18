@@ -2178,6 +2178,8 @@ const DRILL_SESSION_CONFIG: &str = r#"onboarding = false
 agent_parent_notify = true
 [session]
 resume_agents_on_restore = true
+[terminal]
+shell_mode = "non_login"
 "#;
 
 fn write_executable(path: &Path, body: &str) {
@@ -2231,6 +2233,30 @@ fn wait_for_agent(api_socket: &Path, target: &str) {
         );
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn wait_until_launch_ready(api_socket: &Path, target: &str) {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        let response = request(
+            api_socket,
+            serde_json::json!({
+                "id": "drill:agent:pending",
+                "method": "agent.get",
+                "params": {"target": target}
+            }),
+        );
+        last = response.to_string();
+        let pending = response["result"]["agent"]["launch_pending"]
+            .as_bool()
+            .unwrap_or(false);
+        if !pending {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("managed launch still pending on {target}: {last}");
 }
 
 fn wait_for_agent_kind(api_socket: &Path, target: &str, kind: &str) {
@@ -2594,6 +2620,7 @@ fn live_restart_keeps_lane_tree() {
             }
         }),
     ));
+    wait_for_agent(&api_socket, p3);
     thread::sleep(Duration::from_secs(4));
     assert_ok(request(
         &api_socket,
@@ -2628,7 +2655,9 @@ fn live_restart_keeps_lane_tree() {
         &bin.join("claude").display().to_string(),
     );
     wait_for_output(&api_socket, ghost, "started");
-    report_unmanaged_agent(&api_socket, ghost, "claude", Some("ghost-session"));
+    // Row 12 needs a name with no native resume plan. A claude session id would
+    // type `claude --resume` on cold restore and keep the name (spec §4.2).
+    report_unmanaged_agent(&api_socket, ghost, "claude", None);
     assert_ok(request(
         &api_socket,
         serde_json::json!({
@@ -2970,6 +2999,7 @@ fn live_restart_keeps_lane_tree_lineage() {
     let bin = base.join("bin");
     let session = format!("restart-core-lineage-{}", std::process::id());
     let api_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr.sock"));
+    let client_socket = config_home.join(format!("herdr-dev/sessions/{session}/herdr-client.sock"));
     fs::create_dir_all(&bin).unwrap();
     fs::create_dir_all(&base).unwrap();
     let cursor_started = base.join("cursor-started");
@@ -3059,6 +3089,39 @@ fn live_restart_keeps_lane_tree_lineage() {
     assert_ok(request(
         &api_socket,
         serde_json::json!({
+            "id": "lineage:p3:session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": p3,
+                "source": "herdr:cursor",
+                "agent": "cursor",
+                "seq": 1,
+                "agent_session_id": "cursor-lineage-session",
+                "session_start_source": "startup"
+            }
+        }),
+    ));
+    // herdr:cursor is a reserved native state source, so it cannot set hook
+    // idle. A custom source can, and that lets Pending clear after settle.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "lineage:p3:report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": p3,
+                "source": "custom:drill",
+                "agent": "cursor",
+                "state": "idle",
+                "seq": 2
+            }
+        }),
+    ));
+    wait_for_agent(&api_socket, p3);
+    wait_until_launch_ready(&api_socket, p3);
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
             "id": "lineage:p3:tokens",
             "method": "pane.report_metadata",
             "params": {
@@ -3085,7 +3148,6 @@ fn live_restart_keeps_lane_tree_lineage() {
         .output()
         .unwrap();
     assert!(restart.status.success(), "restart failed: {restart:?}");
-    drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(15));
 
     let agents = agent_list(&api_socket);
@@ -3146,9 +3208,12 @@ fn live_restart_keeps_lane_tree_lineage() {
         &api_socket,
         serde_json::json!({"id":"lineage:stop","method":"server.stop","params":{}}),
     );
-    thread::sleep(Duration::from_millis(300));
+    drop(spawned);
+    wait_for_socket_gone(&api_socket, Duration::from_secs(10));
+    wait_for_socket_gone(&client_socket, Duration::from_secs(5));
     let _cursor_argv_before = fs::read_to_string(&cursor_argv).unwrap_or_default();
     let _ = fs::remove_file(&cursor_argv);
+    let _ = fs::remove_file(&cursor_started);
     let restored = spawn_named_session_server_with(
         &config_home,
         &runtime_dir,

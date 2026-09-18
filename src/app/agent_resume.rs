@@ -76,10 +76,16 @@ impl App {
     }
 
     fn pending_agent_resume_candidates(&self) -> Vec<PendingAgentResumeCandidate> {
-        let terminal_area = self.state.view.terminal_area;
+        let terminal_area = if self.state.view.terminal_area.width == 0
+            || self.state.view.terminal_area.height == 0
+        {
+            Rect::new(0, 0, self.state.headless_size.0, self.state.headless_size.1)
+        } else {
+            self.state.view.terminal_area
+        };
         if terminal_area.width == 0 || terminal_area.height == 0 {
             return Vec::new();
-        };
+        }
 
         let mut pending = Vec::new();
         for (ws_idx, ws) in self.state.workspaces.iter().enumerate() {
@@ -109,8 +115,8 @@ impl App {
                         terminal_id: pane.attached_terminal_id.clone(),
                         cwd: terminal.cwd.clone(),
                         plan,
-                        rows: info.inner_rect.height,
-                        cols: info.inner_rect.width,
+                        rows: info.inner_rect.height.max(2),
+                        cols: info.inner_rect.width.max(2),
                     });
                 }
             }

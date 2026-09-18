@@ -3044,6 +3044,10 @@ impl HeadlessServer {
                 self.mark_server_handed_off();
                 self.reject_queued_api_requests_for_handoff();
                 wait_for_live_handoff_response_write(msg.response_write_complete);
+                // Wait connections poll `running` every 100ms and write
+                // `server_handed_off` only after they observe the flag. Exit
+                // immediately and the client reads EmptyResponse instead.
+                std::thread::sleep(Duration::from_millis(150));
                 self.finish_live_handoff_shutdown();
             }
             return true;
@@ -3380,7 +3384,7 @@ impl HeadlessServer {
     /// Handle scheduled tasks for the headless server.
     ///
     /// Similar to the former App scheduler but without terminal resize polling.
-    fn handle_scheduled_tasks_headless(&mut self, now: Instant, geometry_dirty: bool) -> bool {
+    fn handle_scheduled_tasks_headless(&mut self, now: Instant, _geometry_dirty: bool) -> bool {
         let mut changed = false;
 
         // No resize polling needed — server has no terminal.
@@ -3464,14 +3468,14 @@ impl HeadlessServer {
 
         changed |= self.app.handle_tab_bar_status_tasks(now);
 
-        if geometry_dirty {
-            self.app.pending_agent_resume_deadline = None;
-        } else {
-            self.app.sync_pending_agent_resume_deadline(now);
-            changed |= self
-                .app
-                .start_pending_agent_resumes(self.app.pending_agent_resume_due(now));
-        }
+        // `_geometry_dirty` is the loop's `needs_render` flag, including PTY
+        // output. Resetting the resume deadline on that flag prevented
+        // clientless cold restore from typing native resume commands while
+        // restored shells still produced output (spec §4.2).
+        self.app.sync_pending_agent_resume_deadline(now);
+        changed |= self
+            .app
+            .start_pending_agent_resumes(self.app.pending_agent_resume_due(now));
         changed
     }
 }
