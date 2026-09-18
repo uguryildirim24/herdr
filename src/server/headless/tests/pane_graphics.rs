@@ -1256,6 +1256,7 @@ fn encode_direct_client(client: &mut crate::kitty_graphics::surface::ClientState
             width_px: 10,
             height_px: 20,
         },
+        &crate::kitty_graphics::surface::Occlusion::default(),
     ))
     .unwrap()
 }

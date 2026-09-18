@@ -1325,14 +1325,20 @@ mod tests {
             vec![previous.clone(), next.clone()],
         ));
         assert!(state.trust_direct_asset(&previous, image_id));
-        let _ = state.encode(Visibility::Main, (0, 0), None, cell);
+        let _ = state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
 
         // The replacement landed under the same host id, so retiring the previous asset must not
         // delete that id.
         assert!(state.trust_direct_asset(&next, image_id));
         state.set_scene(direct_scene(&next, vec![next.clone()]));
-        let swapped =
-            String::from_utf8(state.encode(Visibility::Main, (0, 0), None, cell)).unwrap();
+        let swapped = String::from_utf8(state.encode(
+            Visibility::Main,
+            (0, 0),
+            None,
+            cell,
+            &Occlusion::default(),
+        ))
+        .unwrap();
         assert!(
             !swapped.contains(&format!("a=d,d=I,i={image_id},")),
             "{swapped}"

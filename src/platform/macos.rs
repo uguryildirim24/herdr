@@ -167,6 +167,7 @@ pub(crate) fn write_config_temporary(
     }
     output.write_all(contents)?;
     output.sync_all()
+}
 
 /// Moves the calling thread to the background QoS class, so macOS keeps it on
 /// efficiency cores and behind interactive work. Best effort.
@@ -178,7 +179,6 @@ pub(crate) fn lower_current_thread_priority() {
         tracing::debug!(result, "failed to lower background thread QoS");
     }
 }
-
 
 const PROC_PGRP_ONLY: u32 = 2;
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
