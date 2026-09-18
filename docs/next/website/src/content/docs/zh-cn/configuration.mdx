@@ -515,7 +515,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: Pane metadata tokens do not survive a server restart. Herdr does not save them with the session, so the `parent` token is empty after a restart and the Agents panel shows every agent at the top level. Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
+**Server restart and persistence**: 实时 `herdr server restart` 会保留每个没有 TTL 的窗格和工作区元数据令牌，包括 `parent`。冷停止后再启动只恢复 `[session] restore_tokens` 中的键（默认是 `parent`、`lane`、`round`、`branch`）。从正在运行的 0.9.0 服务器做第一次跳转时令牌仍会丢失，因为 0.9.0 不会捕获它们；请用 `herdr agent set-parent` 重新链接一次。
 
 ## 通知
 
@@ -592,9 +592,10 @@ pane_graphics_detection = true
 ```toml
 [session]
 resume_agents_on_restore = true
+restore_tokens = ["parent", "lane", "round", "branch"]
 ```
 
-只有通过官方集成获得有效原生会话引用的窗格才能恢复；其他窗格会作为普通 shell 恢复。有关受支持的智能体和持久化行为，请参阅[会话状态与恢复](/docs/session-state/)。
+只有通过官方集成获得有效原生会话引用的窗格才能恢复；其他窗格会作为普通 shell 恢复。冷重启后，Herdr 只恢复 `restore_tokens` 中的元数据令牌键。实时交接会恢复每个没有 TTL 的令牌。`done` 和 `waiting` 这类状态令牌在冷停止后不会恢复，除非你把它们加入此列表。有关受支持的智能体和持久化行为，请参阅[会话状态与恢复](/docs/session-state/)。
 
 ## IME 光标跟踪
 

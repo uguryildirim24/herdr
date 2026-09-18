@@ -10,7 +10,8 @@ Herdr 有多条状态路径,它们解决的是不同的问题。
 | 场景 | 进程继续运行 | 布局恢复 | 最近的屏幕内容恢复 | 智能体对话恢复 |
 | --- | --- | --- | --- | --- |
 | 分离并重新连接 | 是 | 是 | 是,来自实时终端 | 是,因为进程从未停止 |
-| 服务器重启 | 否 | 是 | 仅在开启窗格屏幕历史时 | 仅在有智能体原生会话恢复时 |
+| `herdr server restart` | 是 | 是 | 是,来自实时终端 | 是,因为进程继续运行 |
+| 服务器停止后再启动 | 否 | 是 | 仅在开启窗格屏幕历史时 | 仅在有智能体原生会话恢复时 |
 | 不带 `--handoff` 的更新 | 兼容的服务器继续运行;需要重启的服务器可能要停止/重启 | 重启后恢复 | 仅在开启窗格屏幕历史时 | 仅在有智能体原生会话恢复时 |
 | 带 `--handoff` 的更新 | 对受支持的运行中服务器尽力而为 | 是 | 是,交接成功时来自实时终端 | 是,交接成功时进程保持运行 |
 
@@ -27,6 +28,35 @@ herdr
 ```
 
 这是最强的持久化路径,因为原始进程从未停止。
+
+## `herdr server restart`
+
+`herdr server restart` 替换正在运行的本地 Unix 服务器并保留窗格进程。它是 `herdr update --handoff` 所用同一套实时交接协议的 CLI 语法糖。它不下载二进制，也不设置 `expected_version` 或 `expected_protocol`。
+
+```bash
+herdr server restart
+herdr server restart --exec /absolute/path/to/herdr
+herdr server restart --force
+```
+
+cargo install 之后的默认 restart 是一次升级：旧服务器会 spawn 其启动路径上现在的那个文件。检查 `--exec` 时打印形如 `herdr 0.9.0 → herdr 0.9.1`。只对绝对路径上可执行的 Herdr 二进制使用 `--exec`。当该路径不是 `PATH` 上的 `herdr` 时会发出警告。不要把它指向 cargo 可能删除的 `target/` 目录。
+
+`--force` 覆盖 `restart_busy`（仍在挂起的托管启动或恢复）以及配置文件加载/解析错误。它不会跳过 `--exec` 检查。
+
+`herdr --remote … server restart` 和 `herdr --machine … server restart` 会以 `server restart is local-only` 拒绝。`herdr server live-handoff` 仍作为旧 CLI 的隐藏别名保留。
+
+成功重启后，已连接的 TUI 客户端会断开。请对同一会话重新运行 `herdr`。打开的 CLI 等待会收到 `server_handed_off`，并针对新服务器重试一次。`herdr server stop` 仍会结束窗格进程。
+
+### 从已安装的 0.9.0 第一次跳转
+
+从正在运行的 0.9.0 服务器做第一次 ADE 跳转时，使用旧 CLI 的隐藏子命令 `live-handoff`。此树上下一次跳转使用 `herdr server restart`。
+
+1. 确认没有窗格正处在 `agent start` 中。如需跳转后使用窗格令牌，先保存它们。`herdr status --json` 应显示服务器 0.9.0 且 `live_handoff: true`。
+2. 用 `cargo install --path . --locked --root ~/.local` 安装。Cargo 通过 rename 替换 `~/.local/bin/herdr`。不要对正在运行的文件做 copy 或 truncate。确认 `herdr --version` 是新构建，且 `herdr status --json` 仍显示服务器 0.9.0。
+3. 从旧 CLI 运行不带标志的 `herdr server live-handoff`。不要传 `--expected-protocol` 或 `--expected-version`。不要运行 `herdr update --handoff`。
+4. 窗格进程、公开 ID 和智能体名称会保留。0.9.0 的令牌和已武装的等待不会保留。已连接的 0.9.0 TUI 会退出。
+5. 用 `herdr agent set-parent` 重新链接父级。重新武装等待。为 TUI 重新运行 `herdr`。
+6. 此树上之后的安装，在同样的 cargo rename 之后使用不带 `--exec` 的 `herdr server restart`。
 
 ## 快照恢复
 
@@ -100,7 +130,7 @@ Herdr 只会恢复那些通过当前官方 Herdr 集成上报了原生会话引�
 
 这与快照恢复、窗格历史回放和智能体原生会话恢复不同。交接尝试让当前进程活下去,其他路径则是在旧服务器已经停止之后重建状态。
 
-交接保护的是由服务器拥有的长期会话状态:窗格 PTY 和进程、智能体身份与持久元数据,以及替换服务器所需的插件/会话状态。它不会跨替换边界保留临时协调状态。进行中的 CLI 或 API 请求、等待、订阅流、客户端套接字和窗格间消息可能会中断;客户端应重新连接并重试。
+交接保护的是由服务器拥有的长期会话状态:窗格 PTY 和进程、智能体身份与持久元数据,以及替换服务器所需的插件/会话状态。已连接的 TUI 客户端会断开，必须重新运行 `herdr`。收到 `server_handed_off` 的 CLI 请求会针对新服务器重试一次。订阅流和窗格图形仍会在替换时断开。
 
 更新后的 Unix 服务器可以分批传输，在一次交接中发送超过 64 个窗格。发送方服务器必须已经支持此功能；从旧服务器进行第一次升级时，仍受其原有的 64 窗格限制。此时可能需要正常重启服务器，这会结束窗格进程。分批传输不会改变更新的安装顺序，也不会取消其他交接兼容性要求。
 

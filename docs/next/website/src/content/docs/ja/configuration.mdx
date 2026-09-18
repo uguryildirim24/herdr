@@ -515,7 +515,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: Pane metadata tokens do not survive a server restart. Herdr does not save them with the session, so the `parent` token is empty after a restart and the Agents panel shows every agent at the top level. Orchestrators and recovery scripts must re-link child agents after a restart with `herdr agent set-parent <child_pane_id> <parent_pane_id>`.
+**Server restart and persistence**: `herdr server restart`（ライブハンドオフ）では TTL のないペイン／ワークスペースのメタデータトークン（`parent` を含む）が残ります。コールドな停止→起動では `[session] restore_tokens` のキーだけが復元されます（デフォルトは `parent`、`lane`、`round`、`branch`）。稼働中の 0.9.0 サーバーからの最初のバウンスではトークンが落ちます。0.9.0 はトークンをキャプチャしないためです。そのときは一度だけ `herdr agent set-parent` で再リンクしてください。
 
 ## 通知
 
@@ -592,9 +592,10 @@ Herdr はデフォルトで、サーバーの再起動後に対応する Agent �
 ```toml
 [session]
 resume_agents_on_restore = true
+restore_tokens = ["parent", "lane", "round", "branch"]
 ```
 
-公式インテグレーションからの有効なネイティブセッション参照を持つペインだけが再開できます。その他のペインは通常のシェルとして復元されます。対応する Agent と永続化の挙動については、[セッション状態と復元](/docs/session-state/)を参照してください。
+公式インテグレーションからの有効なネイティブセッション参照を持つペインだけが再開できます。その他のペインは通常のシェルとして復元されます。コールド再起動のあと、Herdr は `restore_tokens` にあるメタデータトークンキーだけを復元します。ライブハンドオフは TTL のないトークンをすべて復元します。`done` や `waiting` のような状態トークンは、このリストに追加しない限りコールド停止後には復元されません。対応する Agent と永続化の挙動については、[セッション状態と復元](/docs/session-state/)を参照してください。
 
 ## IME カーソルトラッキング
 
