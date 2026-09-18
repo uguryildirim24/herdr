@@ -384,6 +384,44 @@ fn agent_navigation_visible_pane_ids_respects_flag() {
     assert_eq!(visible, vec!["p1", "p2"]);
 }
 
+#[test]
+fn hiding_the_parent_token_does_not_drop_lineage() {
+    let mut snapshot = snapshot();
+    snapshot.agents = vec![
+        tree_agent("p1", AgentStatus::Working, 1, None),
+        tree_agent("p2", AgentStatus::Idle, 2, Some("p1")),
+    ];
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    config.agents = toml::from_str(
+        r#"
+rows = [[{ token = "$parent", rules = [{ contains = "", hide = true }] }, "agent"]]
+"#,
+    )
+    .unwrap();
+    let collapsed = HashSet::new();
+    let rows = agent_rows(&snapshot, &config, Some(&collapsed), None);
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.pane_id.as_str(), row.depth))
+            .collect::<Vec<_>>(),
+        vec![("p1", 0), ("p2", 1)]
+    );
+    assert!(
+        rows.iter().all(|row| {
+            !row.rows.iter().flatten().any(|token| {
+                matches!(
+                    &token.kind,
+                    crate::ui::ResolvedTokenKind::Custom(value) if value == "p1"
+                )
+            })
+        }),
+        "hide = true must drop the displayed parent token without flattening the tree"
+    );
+}
+
 fn tree_agent(
     pane_id: &str,
     status: AgentStatus,
