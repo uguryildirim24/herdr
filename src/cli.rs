@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -769,9 +769,10 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
 pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {
     let client = target::api_client()?;
     ensure_server_protocol_compatible(&client, &request.id)?;
-    client
+    let value = client
         .request_value(request)
-        .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
+        .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))?;
+    retry_after_server_handed_off(request, value)
 }
 
 pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {
@@ -779,6 +780,69 @@ pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde
     client
         .request_value(request)
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
+}
+
+fn retry_after_server_handed_off(
+    request: &Request,
+    value: serde_json::Value,
+) -> std::io::Result<serde_json::Value> {
+    if value
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        != Some("server_handed_off")
+    {
+        return Ok(value);
+    }
+    wait_for_handoff_successor(&request.id)?;
+    let retry = retry_request_after_handoff(request);
+    let client = target::api_client()?;
+    ensure_server_protocol_compatible(&client, &retry.id)?;
+    client
+        .request_value(&retry)
+        .map_err(|err| map_server_not_running_or_io(err, &retry.id, &client))
+}
+
+fn retry_request_after_handoff(request: &Request) -> Request {
+    match &request.method {
+        Method::AgentPrompt(params) => {
+            let Some(wait) = params.wait.as_ref() else {
+                return request.clone();
+            };
+            Request {
+                id: request.id.clone(),
+                method: Method::AgentWait(crate::api::schema::AgentWaitParams {
+                    target: params.target.clone(),
+                    until: wait.until.clone(),
+                    timeout_ms: wait.timeout_ms,
+                }),
+            }
+        }
+        _ => request.clone(),
+    }
+}
+
+fn wait_for_handoff_successor(request_id: &str) -> std::io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_err: Option<std::io::Error> = None;
+    while Instant::now() < deadline {
+        match target::api_client() {
+            Ok(client) => match client.status() {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    last_err = Some(map_server_not_running_or_io(err, request_id, &client));
+                }
+            },
+            Err(err) => last_err = Some(err),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out waiting for server after handoff",
+        )
+    }))
 }
 
 fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
@@ -1183,5 +1247,40 @@ mod tests {
                 "5000",
             ]
         );
+    }
+
+    #[test]
+    fn prompt_wait_retries_as_agent_wait_after_handoff() {
+        use crate::api::schema::{
+            AgentPromptParams, AgentPromptWaitOptions, AgentStatus, EmptyParams, Method, Request,
+        };
+
+        let request = Request {
+            id: "cli:agent:prompt".into(),
+            method: Method::AgentPrompt(AgentPromptParams {
+                target: "lane-a".into(),
+                text: "hi".into(),
+                wait: Some(AgentPromptWaitOptions {
+                    until: vec![AgentStatus::Idle],
+                    timeout_ms: Some(5_000),
+                    submission_deadline: None,
+                }),
+            }),
+        };
+        let retry = super::retry_request_after_handoff(&request);
+        match retry.method {
+            Method::AgentWait(params) => {
+                assert_eq!(params.target, "lane-a");
+                assert_eq!(params.until, vec![AgentStatus::Idle]);
+                assert_eq!(params.timeout_ms, Some(5_000));
+            }
+            other => panic!("expected agent wait, got {other:?}"),
+        }
+
+        let list = Request {
+            id: "cli:agent:list".into(),
+            method: Method::AgentList(EmptyParams::default()),
+        };
+        assert_eq!(super::retry_request_after_handoff(&list), list);
     }
 }

@@ -21,6 +21,62 @@ pub(super) fn wait_for_live_handoff_response_write(
 }
 
 impl HeadlessServer {
+    pub(super) fn live_handoff_refusal(
+        &self,
+        params: &crate::api::schema::ServerLiveHandoffParams,
+    ) -> Option<(String, String)> {
+        if let Some(exe) = params.import_exe.as_deref() {
+            if !std::path::Path::new(exe).is_absolute() {
+                return Some((
+                    "invalid_exec".into(),
+                    format!("import exe must be an absolute path: {exe}"),
+                ));
+            }
+        }
+        if params.force {
+            return None;
+        }
+        let busy = self.restart_busy_pane_ids();
+        if busy.is_empty() {
+            return None;
+        }
+        Some((
+            "restart_busy".into(),
+            format!("restart refused while panes are busy: {}", busy.join(", ")),
+        ))
+    }
+
+    fn restart_busy_pane_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for (ws_idx, workspace) in self.app.state.workspaces.iter().enumerate() {
+            for tab in &workspace.tabs {
+                for (pane_id, pane) in &tab.panes {
+                    let Some(terminal) = self.app.state.terminals.get(&pane.attached_terminal_id)
+                    else {
+                        continue;
+                    };
+                    if terminal.next_managed_agent_deadline().is_none()
+                        && terminal.pending_agent_resume_plan.is_none()
+                    {
+                        continue;
+                    }
+                    if let Some(public_id) = self.app.public_pane_id(ws_idx, *pane_id) {
+                        ids.push(public_id);
+                    }
+                }
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    pub(super) fn mark_server_handed_off(&self) {
+        if let Some(api_server) = &self.api_server {
+            api_server.mark_handed_off();
+        }
+    }
+
     #[cfg(unix)]
     pub(super) fn perform_live_handoff(
         &mut self,
@@ -220,6 +276,7 @@ impl HeadlessServer {
     pub(super) fn finish_live_handoff_shutdown(&mut self) {
         self.shutting_down = true;
         self.app.state.should_quit = true;
+        self.should_quit.store(true, Ordering::Release);
         self.app.policy.persist_session = false;
         info!("live handoff completed; old server exiting");
     }

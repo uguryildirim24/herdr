@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use regex::Regex;
@@ -19,12 +19,35 @@ use crate::ipc::LocalStream;
 
 const AGENT_PROMPT_EFFECT_TIMEOUT_MS: u64 = 5_000;
 
+fn server_handed_off_json(request_id: &str) -> String {
+    serde_json::to_string(&ErrorResponse {
+        id: request_id.to_string(),
+        error: ErrorBody {
+            code: "server_handed_off".into(),
+            message: "server handed off to a new process".into(),
+        },
+    })
+    .unwrap_or_else(|_| {
+        r#"{"id":"","error":{"code":"server_handed_off","message":"server handed off to a new process"}}"#
+            .to_string()
+    })
+}
+
+fn connection_stop_response(request_id: &str, handed_off: &Arc<AtomicBool>) -> Option<String> {
+    if handed_off.load(Ordering::Relaxed) {
+        Some(server_handed_off_json(request_id))
+    } else {
+        None
+    }
+}
+
 pub(super) fn wait_for_output(
     request_id: String,
     params: crate::api::schema::PaneWaitForOutputParams,
     stream: &mut LocalStream,
     api_tx: &ApiRequestSender,
     running: &Arc<AtomicBool>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
     crate::logging::api_wait_started(&request_id, &params.pane_id, params.timeout_ms);
     let deadline = params
@@ -52,8 +75,13 @@ pub(super) fn wait_for_output(
 
     loop {
         if should_stop_connection(stream, running)? {
-            crate::logging::api_wait_completed(&request_id, &params.pane_id, "client_disconnected");
-            return Ok(None);
+            let outcome = if handed_off.load(Ordering::Relaxed) {
+                "server_handed_off"
+            } else {
+                "client_disconnected"
+            };
+            crate::logging::api_wait_completed(&request_id, &params.pane_id, outcome);
+            return Ok(connection_stop_response(&request_id, handed_off));
         }
 
         let read_request = Request {
@@ -136,6 +164,7 @@ pub(super) fn wait_for_agent(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
     let last_event_sequence = event_hub.current_sequence();
     let initial = match agent_get(&request_id, &params.target, api_tx) {
@@ -167,6 +196,7 @@ pub(super) fn wait_for_agent(
         api_tx,
         event_hub,
         running,
+        handed_off,
     )? {
         Some(AgentWaitOutcome::Matched(agent)) => agent_wait_success(request_id, *agent).map(Some),
         Some(AgentWaitOutcome::Response(response)) => Ok(Some(response)),
@@ -181,6 +211,7 @@ pub(super) fn prompt_agent(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
     let Some(wait) = params.wait.clone() else {
         return Ok(Some(dispatch_to_app_with_timeout(
@@ -279,6 +310,7 @@ pub(super) fn prompt_agent(
             api_tx,
             event_hub,
             running,
+            handed_off,
         )?
         else {
             return Ok(None);
@@ -310,6 +342,7 @@ pub(super) fn prompt_agent(
         api_tx,
         event_hub,
         running,
+        handed_off,
     )?
     else {
         return Ok(None);
@@ -368,6 +401,7 @@ fn wait_for_resolved_agent(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<AgentWaitOutcome>> {
     let deadline = wait
         .timeout_ms
@@ -385,7 +419,13 @@ fn wait_for_resolved_agent(
 
     loop {
         if should_stop_connection(stream, running)? {
-            return Ok(None);
+            return Ok(if handed_off.load(Ordering::Relaxed) {
+                Some(AgentWaitOutcome::Response(server_handed_off_json(
+                    &request_id,
+                )))
+            } else {
+                None
+            });
         }
 
         let mut should_probe = false;
@@ -712,6 +752,7 @@ pub(super) fn wait_for_event(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
+    handed_off: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
     let deadline = params
         .timeout_ms
@@ -735,7 +776,7 @@ pub(super) fn wait_for_event(
 
     loop {
         if should_stop_connection(stream, running)? {
-            return Ok(None);
+            return Ok(connection_stop_response(&request_id, handed_off));
         }
 
         match active.poll_for_wait(api_tx, event_hub) {
@@ -835,6 +876,17 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_stop_response_writes_server_handed_off() {
+        let handed_off = Arc::new(AtomicBool::new(true));
+        let json = connection_stop_response("wait-1", &handed_off).expect("json");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["error"]["code"], "server_handed_off");
+        assert_eq!(value["id"], "wait-1");
+        let idle = Arc::new(AtomicBool::new(false));
+        assert!(connection_stop_response("wait-1", &idle).is_none());
+    }
 
     #[test]
     fn agent_wait_probe_only_translates_agent_disappearance() {

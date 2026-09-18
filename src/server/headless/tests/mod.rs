@@ -97,6 +97,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         effective_size: headless_size,
         shutting_down: false,
         handoff_in_progress: false,
+        handoff_committed: false,
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
         should_quit,
