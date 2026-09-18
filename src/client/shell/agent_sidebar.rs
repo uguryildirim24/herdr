@@ -513,6 +513,27 @@ pub(super) fn agent_rows(
     rows
 }
 
+pub(super) fn agent_row(
+    snapshot: &ClientShellSnapshot,
+    pane_id: &str,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Option<AgentRow> {
+    build_agent_row(
+        pane_id,
+        None,
+        0,
+        false,
+        Default::default(),
+        false,
+        0,
+        None,
+        snapshot,
+        config,
+        machine,
+    )
+}
+
 /// Dims the dragged row and marks the parent it would nest under with an accent bar in the
 /// free first column.
 fn render_agent_drag_marks(

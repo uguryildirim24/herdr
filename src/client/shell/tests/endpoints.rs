@@ -486,7 +486,7 @@ fn saved_machine_preserves_endpoint_scoped_worktree_collapses() {
         .expect("local worktree group marker");
     assert_eq!(key, "repo");
     let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
-    assert_eq!(buffer[(local_toggle.x, local_toggle.y)].symbol(), "▸");
+    assert_eq!(buffer[(local_toggle.x, local_toggle.y)].symbol(), "▶");
     assert!((local_parent.rect.x..local_parent.rect.right())
         .any(|x| buffer[(x, local_parent.rect.y)].fg == state.config.palette.red));
 
@@ -728,7 +728,10 @@ fn expanded_machine_sidebar_applies_space_row_gap_within_each_machine() {
         .find(|hit| hit.endpoint_id == remote_id)
         .expect("remote machine");
     assert_eq!(local_workspaces[0].rect.y, local_machine.rect.bottom());
-    assert_eq!(remote_machine.rect.y, local_workspaces[1].rect.bottom());
+    assert_eq!(
+        remote_machine.rect.y,
+        local_workspaces[1].rect.bottom() + state.config.spaces.row_gap
+    );
 
     let remote_workspaces = state
         .hits
@@ -1523,7 +1526,7 @@ fn machine_arrow_toggles_inactive_machine_without_switching() {
                 let buffer = frame.to_ratatui_buffer().expect("frame buffer");
                 assert_eq!(
                     buffer[(column, machine.y)].symbol(),
-                    if collapsed { "▾" } else { "▸" }
+                    if collapsed { "▼" } else { "▶" }
                 );
                 let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
                     kind: MouseEventKind::Down(MouseButton::Left),
