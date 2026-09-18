@@ -2960,11 +2960,9 @@ fn live_restart_keeps_lane_tree() {
 }
 
 #[test]
-#[ignore = "lane B: lineage-persist not merged"]
 fn live_restart_keeps_lane_tree_lineage() {
-    // Rows 4, 6, 10, 11, and 13 need lane B (token persist, GONE notify,
-    // managed_agent_args replay, cold name restore). Keep this compiling so
-    // the reviewer can drop the ignore after merging lineage-persist.
+    // Rows 4, 6, 10, 11, and 13: token persist, GONE notify,
+    // managed_agent_args replay, cold name restore.
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");

@@ -4744,11 +4744,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "lane B: lineage-persist not merged"]
     fn agent_start_with_cyclic_parent_returns_parent_cycle_and_launches_nothing() {
-        // Needs lane B's start_agent hook, which applies AgentStartParams.parent
-        // through the pane report-metadata gate before typing. tests/cli.rs is
-        // Linux-only and did not run on this macOS lane.
+        // Lane B's start_agent hook applies AgentStartParams.parent through the
+        // pane report-metadata gate before typing.
         let (mut app, panes) = app_with_panes(2);
         let _: SuccessResponse =
             serde_json::from_str(&report_parent(&mut app, &panes[1], Some(&panes[0]))).unwrap();

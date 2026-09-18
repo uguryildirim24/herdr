@@ -189,19 +189,6 @@ impl App {
         if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
             return Err(AgentStartError::TargetBusy(params.pane_id));
         }
-        let mut argv = vec![executable.to_string()];
-        argv.extend(params.args.clone());
-        let bytes = {
-            let runtime = self
-                .terminal_runtimes
-                .get(&terminal_id)
-                .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-            let shell_name = available_shell_name(runtime)
-                .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
-            let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-                .ok_or(AgentStartError::InvalidArgument)?;
-            crate::app::api_helpers::encode_api_submission(runtime, &command)
-        };
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -211,6 +198,9 @@ impl App {
             return Err(AgentStartError::InvalidTimeout);
         }
 
+        // Apply parent through the metadata gate before encoding or typing so a
+        // cyclic parent returns parent_cycle and launches nothing, even when
+        // the pane has no live runtime yet.
         if let Some(parent) = params.parent {
             let report = self.handle_api_request_after_internal_events_drained(
                 crate::api::schema::Request {
@@ -241,6 +231,20 @@ impl App {
                 return Err(AgentStartError::Metadata(error));
             }
         }
+
+        let mut argv = vec![executable.to_string()];
+        argv.extend(params.args.clone());
+        let bytes = {
+            let runtime = self
+                .terminal_runtimes
+                .get(&terminal_id)
+                .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+            let shell_name = available_shell_name(runtime)
+                .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+            let command = crate::platform::interactive_shell_command(&argv, &shell_name)
+                .ok_or(AgentStartError::InvalidArgument)?;
+            crate::app::api_helpers::encode_api_submission(runtime, &command)
+        };
 
         let now = Instant::now();
         let runtime = self
