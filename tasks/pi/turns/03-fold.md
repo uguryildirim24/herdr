@@ -1,6 +1,7 @@
 # SPEC-pi v2 fold (turn 03)
 
-Lane `pi-fold`, 2026-09-18. v1 → v2 from checks a and b and Rolf's 17:50 / 18:05 rows.
+Lane `pi-fold`, 2026-09-18. v1 → v2 from checks a and b and Rolf's 17:50 / 18:05 / 18:30 rows.
+18:30 supersedes brief item 1 and the 17:50 / 18:05 Cursor rows: Cursor stays outside pi.
 
 ## What changed (v1 → v2)
 
@@ -8,7 +9,7 @@ Workers share one pi folder and one login file, not a copy per worker.
 The "approve" switch is gone: it trusted project add-on code, and it approved no tools.
 A helper inside pi reports a usage limit, a dead login, or a dead endpoint as stuck / waiting, never as finished.
 A small `pi` launcher on your path brings a worker back with that folder after a herdr restart; the unmerged restart branch is not required for pi.
-Cursor runs under pi through a harness connector on Cursor's official toolkit (pi keeps the tools); SuperGrok / X Premium is the backup door; Pro stays a Codex worker the bridge plugin drives.
+Cursor stays in the Cursor app while this port runs, then that recipe is retired; it never runs under pi. Grok inside pi, if ever, is only an xAI sign-in or key. Pro stays a Codex worker the bridge plugin drives.
 Pi is a library inside the main harness add-on, plus a small setup / login / doctor program.
 Workers never trust a project's own pi add-ons, and they do not load your personal skill collection.
 Login is pi's own on-screen login, once per provider; there is no shell login command.
@@ -17,14 +18,15 @@ Direct DeepSeek and Kimi stay; OpenCode is only for what only OpenCode has, unle
 
 ## Decided (do not ask again)
 
-- Cursor and OpenCode run under pi (Rolf, 2026-09-18 18:05).
+- Cursor stays outside pi. Native Cursor lanes only, then that recipe is retired. No SDK connector, no community add-on (Rolf, 2026-09-18 18:30). This replaces the 17:50 and 18:05 Cursor rows.
+- Unofficial Cursor add-ons that reuse the Cursor app login are out (both checkers; kept as a note).
+- OpenCode still runs under pi (Rolf, 2026-09-18 17:50 / 18:05, not withdrawn).
 - Pro stays a separate Codex worker that the bridge plugin drives (Rolf, 2026-09-18 18:05).
 - Pro is a general worker, not spec-only, and has no weekly send cap from us (Rolf, 2026-09-18 17:50).
 - The model picker is built in this plugin round (Rolf, 2026-09-18 17:50).
 - Turn on the Codex conversation-id hook (Rolf, 2026-09-18 17:50).
 - Workers never run add-on code that a project stores in its own folder (fold default).
 - Pi workers see only the skills the harness gives them, not your personal collection (fold default).
-- The Cursor route is a small harness connector on Cursor's official toolkit; pi keeps the tools; community connectors that reuse the Cursor app login are out (fold default).
 - Pi lives inside the main harness add-on as a library, with a small setup program (fold default).
 - One shared settings folder and one login for every pi worker (fold default).
 - A herdr restart does not wait on the unmerged restart branch for pi workers (fold default).
@@ -58,9 +60,9 @@ Each item is a picturable choice. Pick one option.
    - It tries again by itself after the wait time the service gives.
    - It is marked stuck until you look at that pane.
 
-6. If Cursor's toolkit does not give Grok at extra-high on your key:
-   - Workers use a SuperGrok or X Premium sign-in instead.
-   - Grok stays in the Cursor app until that toolkit does.
+6. After Cursor lanes go away, Grok:
+   - Workers use a SuperGrok or X Premium sign-in.
+   - Workers skip Grok.
    - Workers pay per token for Grok through OpenCode.
 
 7. If a worker's folder was deleted before a restart:
