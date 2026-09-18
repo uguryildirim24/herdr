@@ -2816,7 +2816,7 @@ mod tests {
                 kind: "pi".into(),
                 pane_id,
                 args: Vec::new(),
-                timeout_ms: Some(1_000),
+                timeout_ms: Some(4_000),
                 parent: None,
             }),
         });

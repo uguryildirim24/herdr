@@ -502,16 +502,9 @@ impl TerminalState {
                 self.hook_report_sequences.remove(&source);
                 self.hook_authority = None;
             }
-            if !newer_custom_authority
-                && self
-                    .persisted_agent_session
-                    .as_ref()
-                    .is_some_and(|session| {
-                        crate::detect::parse_agent_label(&session.agent) == agent
-                    })
-            {
-                self.persisted_agent_session = None;
-            }
+            // Keep persisted_agent_session so a later cold restore can still
+            // type a native resume plan after GONE (spec §4.2 / drill row 10).
+            // Stale post-exit hooks stay rejected via the suppression map.
             if let Some(agent) = agent {
                 let agent_label = crate::detect::agent_label(agent);
                 let mut cleared_metadata_sources = Vec::new();
@@ -2080,12 +2073,13 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        let durable_session = self.persisted_agent_session.clone();
+        let durable_args = self.managed_agent_args.clone();
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.hook_authority = None;
-        self.persisted_agent_session = None;
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
@@ -2093,12 +2087,17 @@ impl TerminalState {
         self.state = AgentState::Unknown;
         self.last_agent_state_change_seq = None;
         self.launch_argv = None;
-        self.managed_agent_args.clear();
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();
+        // Keep persisted_agent_session and managed_agent_args so stop+cold
+        // restore can still type the native resume plan after the child is
+        // gone (spec §4.2 / drill row 10). clear_agent_name may drop a
+        // matching launch session; put the durable refs back.
+        self.persisted_agent_session = durable_session;
+        self.managed_agent_args = durable_args;
     }
 
     pub fn is_agent_terminal(&self) -> bool {
@@ -5875,7 +5874,7 @@ mod tests {
     }
 
     #[test]
-    fn process_exit_clears_matching_persisted_session_ref() {
+    fn process_exit_keeps_matching_persisted_session_ref() {
         let mut terminal = test_terminal();
         let session_ref =
             crate::agent_resume::AgentSessionRef::path(test_session_path("pi.jsonl")).unwrap();
@@ -5886,7 +5885,7 @@ mod tests {
         });
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
 
-        let mutation = terminal.set_detected_state_with_screen_signals_at(
+        let _mutation = terminal.set_detected_state_with_screen_signals_at(
             Some(Agent::Pi),
             AgentState::Idle,
             false,
@@ -5896,17 +5895,23 @@ mod tests {
             std::time::Instant::now(),
         );
 
-        assert!(mutation.session_ref_changed);
-        assert!(terminal.persisted_agent_session.is_none());
+        assert_eq!(
+            terminal.persisted_agent_session.as_ref().map(|session| (
+                session.source.as_str(),
+                session.agent.as_str(),
+                session.session_ref.value.as_str()
+            )),
+            Some(("herdr:pi", "pi", session_ref.value.as_str()))
+        );
 
         let delayed = terminal.set_agent_session_ref(
             "herdr:pi".into(),
             "pi".into(),
-            Some(session_ref),
+            Some(session_ref.clone()),
             Some(21),
         );
         assert!(delayed.is_none());
-        assert!(terminal.persisted_agent_session.is_none());
+        assert!(terminal.persisted_agent_session.is_some());
     }
 
     #[test]
@@ -5957,7 +5962,7 @@ mod tests {
         assert_eq!(terminal.state, AgentState::Unknown);
         assert!(terminal.detected_agent.is_none());
         assert!(terminal.agent_name.is_none());
-        assert!(terminal.persisted_agent_session.is_none());
+        assert!(terminal.persisted_agent_session.is_some());
         assert!(!terminal.respawn_shell_on_exit);
         assert!(!terminal.finish_agent_process_acquisition());
     }
