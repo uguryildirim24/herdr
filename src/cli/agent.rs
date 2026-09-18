@@ -514,9 +514,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                     }
                     _ => {}
                 }
-                if let Some(tokens_obj) = agent.get_mut("tokens").and_then(|t| t.as_object_mut()) {
-                    tokens_obj.insert("parent".to_string(), serde_json::Value::String(parent_id));
-                }
+                attach_parent_token(&mut agent, parent_id);
             }
             response["result"]["agent"] = agent;
             super::print_response(&response)
@@ -861,6 +859,17 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+fn attach_parent_token(agent: &mut serde_json::Value, parent_id: String) {
+    match agent.get_mut("tokens") {
+        Some(serde_json::Value::Object(tokens)) => {
+            tokens.insert("parent".to_string(), serde_json::Value::String(parent_id));
+        }
+        _ => {
+            agent["tokens"] = serde_json::json!({ "parent": parent_id });
+        }
+    }
+}
+
 fn agent_set_parent(args: &[String]) -> std::io::Result<i32> {
     let [target, value] = args else {
         eprintln!("usage: herdr agent set-parent <agent|pane_id> <parent_pane_id>|--clear");
@@ -1157,6 +1166,21 @@ mod tests {
             .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn attach_parent_token_creates_tokens_when_absent() {
+        let mut agent = serde_json::json!({"name": "worker", "pane_id": "w2:p1"});
+        attach_parent_token(&mut agent, "w1:p1".into());
+        assert_eq!(agent["tokens"]["parent"], "w1:p1");
+
+        let mut agent = serde_json::json!({
+            "name": "worker",
+            "tokens": {"summary": "ok"}
+        });
+        attach_parent_token(&mut agent, "w1:p1".into());
+        assert_eq!(agent["tokens"]["parent"], "w1:p1");
+        assert_eq!(agent["tokens"]["summary"], "ok");
     }
 
     #[test]
