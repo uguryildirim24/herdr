@@ -405,6 +405,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Resume supported AI-agent panes into their native conversation sessions after
 # a Herdr server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
+# Metadata token keys restored from a cold session snapshot. Live handoff
+# restores every non-TTL token.
+# restore_tokens = ["parent", "lane", "round", "branch"]
 
 [remote]
 # Whether herdr manages the ssh config used for `herdr --remote`.
