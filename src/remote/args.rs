@@ -115,6 +115,16 @@ pub(crate) fn extract_remote_args(
     Ok((cleaned, remote))
 }
 
+pub(crate) fn is_server_restart_command(args: &[String]) -> bool {
+    matches!(
+        (
+            args.get(1).map(String::as_str),
+            args.get(2).map(String::as_str)
+        ),
+        (Some("server"), Some("restart" | "live-handoff"))
+    )
+}
+
 pub(crate) fn validate_remote_target(target: &str) -> Result<&str, String> {
     if target.is_empty() {
         return Err("missing value for --remote".to_string());
@@ -123,4 +133,19 @@ pub(crate) fn validate_remote_target(target: &str) -> Result<&str, String> {
         return Err("--remote target must not start with '-'".to_string());
     }
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_restart_and_live_handoff_are_local_only_commands() {
+        let restart = ["herdr".into(), "server".into(), "restart".into()];
+        let live = ["herdr".into(), "server".into(), "live-handoff".into()];
+        let list = ["herdr".into(), "agent".into(), "list".into()];
+        assert!(is_server_restart_command(&restart));
+        assert!(is_server_restart_command(&live));
+        assert!(!is_server_restart_command(&list));
+    }
 }

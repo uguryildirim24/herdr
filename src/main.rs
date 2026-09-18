@@ -559,7 +559,11 @@ fn main() -> io::Result<()> {
             )
         })
     {
-        eprintln!("error: --remote can only be used with the default launch command");
+        if remote::is_server_restart_command(&args) {
+            eprintln!("error: server restart is local-only");
+        } else {
+            eprintln!("error: --remote can only be used with the default launch command");
+        }
         eprintln!("run 'herdr --help' for usage");
         std::process::exit(2);
     }
@@ -626,6 +630,7 @@ fn main() -> io::Result<()> {
         println!("       herdr channel set <stable|preview>");
         println!("       herdr machine <subcommand> ...");
         println!("       herdr server stop");
+        println!("       herdr server restart [--exec PATH] [--force]");
         println!("       herdr server reload-config");
         println!("       herdr api <subcommand> ...");
         println!("       herdr completion <shell>");
