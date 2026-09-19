@@ -39,20 +39,20 @@ need an explicit map entry). "used" = a plugin recipe row already names it.
 | k3 | 1M | 131k | 3 / 15 | yes | low high max (adaptive) | pi_kimi_k3 |
 | k3-256k | 262k | 131k | listed 0 | yes | low high max (adaptive) | |
 
-## anthropic (Claude login, OAuth in pi; not logged in yet on the shared folder)
+## Claude (raw models; harness is a separate Claude alias, later)
 
-Rolf 2026-09-19: every model in the pool runs through pi, Claude included. pi's built-in
-table carries these rows; the overlay has no Anthropic entry yet because no login ran. The
-plugin's enabled pi providers are still the three above (`hp:src/pi/roles.rs`), so
-Anthropic as a pi provider is a new SPEC-ADE §6 item. Rolf's standing rules: Opus lanes run
-high, never xhigh; throwaway panes run Haiku.
+Rolf 2026-09-19: this table is about raw models and their efforts, not the harness. Claude
+lanes will run through a separate Claude Code alias trimmed to the tools a worker needs, so
+it behaves like pi. That alias is SPEC-ADE §6 item 115, for later. No Anthropic login in pi.
+Rolf's standing rules: Opus lanes run high, never xhigh; throwaway panes run Haiku. Context,
+output and price below are pi's catalogue numbers for the same ids.
 
 | id | ctx | out | in/out $ | efforts | used |
 |---|---|---|---|---|---|
-| claude-fable-5-1 | 1M | 128k | 10 / 50 | minimal low medium high xhigh max | the coordinator pane (native) |
-| claude-opus-5 | 1M | 128k | 5 / 25 | minimal low medium high xhigh max | lanes at high (native) |
-| claude-sonnet-5 | 1M | 128k | 2 / 10 | off minimal low medium high xhigh max | workflows (native) |
-| claude-haiku-4-5-20251001 | 200k | 64k | 1 / 5 | off minimal low medium high | throwaway panes (native) |
+| claude-fable-5-1 | 1M | 128k | 10 / 50 | minimal low medium high xhigh max | the coordinator pane |
+| claude-opus-5 | 1M | 128k | 5 / 25 | minimal low medium high xhigh max | lanes at high |
+| claude-sonnet-5 | 1M | 128k | 2 / 10 | off minimal low medium high xhigh max | workflows |
+| claude-haiku-4-5-20251001 | 200k | 64k | 1 / 5 | off minimal low medium high | throwaway panes |
 
 ## Dropped by Rolf (2026-09-19)
 
@@ -64,5 +64,5 @@ LongCat, both MiMo, both MiniMax, Muse 1.2, Qwen 3.6 and 3.7. Kimi: `kimi-for-co
 
 ## Counts
 
-16 pi rows (4 ChatGPT, 6 Go, 2 Kimi, 4 Anthropic); 5 named by plugin recipes today. Native
-Codex (Pro on the Mac) and agy (research) stay outside this table.
+16 models: 12 through pi (4 ChatGPT, 6 Go, 2 Kimi) and 4 Claude through the alias; 5 named
+by plugin recipes today. Native Codex (Pro on the Mac) and agy (research) stay outside.
