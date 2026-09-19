@@ -39,17 +39,20 @@ need an explicit map entry). "used" = a plugin recipe row already names it.
 | k3 | 1M | 131k | 3 / 15 | yes | low high max (adaptive) | pi_kimi_k3 |
 | k3-256k | 262k | 131k | listed 0 | yes | low high max (adaptive) | |
 
-## Claude (native kind, outside pi, Claude Code CLI)
+## anthropic (Claude login, OAuth in pi; not logged in yet on the shared folder)
 
-The CLI takes `--model <alias or id>` and `--effort low|medium|high|xhigh|max`. Rolf's
-standing rules: Opus lanes run high, never xhigh; throwaway panes run Haiku.
+Rolf 2026-09-19: every model in the pool runs through pi, Claude included. pi's built-in
+table carries these rows; the overlay has no Anthropic entry yet because no login ran. The
+plugin's enabled pi providers are still the three above (`hp:src/pi/roles.rs`), so
+Anthropic as a pi provider is a new SPEC-ADE §6 item. Rolf's standing rules: Opus lanes run
+high, never xhigh; throwaway panes run Haiku.
 
-| alias | id | efforts the flag accepts | in use |
-|---|---|---|---|
-| fable | claude-fable-5-1 | low medium high xhigh max | the coordinator pane |
-| opus | claude-opus-5 | low medium high xhigh max | lanes at high |
-| sonnet | claude-sonnet-5 | low medium high xhigh max | workflows, fan-outs |
-| haiku | claude-haiku-4-5-20251001 | flag accepted; honoured: not verified | throwaway panes |
+| id | ctx | out | in/out $ | efforts | used |
+|---|---|---|---|---|---|
+| claude-fable-5-1 | 1M | 128k | 10 / 50 | minimal low medium high xhigh max | the coordinator pane (native) |
+| claude-opus-5 | 1M | 128k | 5 / 25 | minimal low medium high xhigh max | lanes at high (native) |
+| claude-sonnet-5 | 1M | 128k | 2 / 10 | off minimal low medium high xhigh max | workflows (native) |
+| claude-haiku-4-5-20251001 | 200k | 64k | 1 / 5 | off minimal low medium high | throwaway panes (native) |
 
 ## Dropped by Rolf (2026-09-19)
 
@@ -61,5 +64,5 @@ LongCat, both MiMo, both MiniMax, Muse 1.2, Qwen 3.6 and 3.7. Kimi: `kimi-for-co
 
 ## Counts
 
-12 pi rows (4 ChatGPT, 6 Go, 2 Kimi) plus 4 Claude models; 5 pi rows named by plugin
-recipes today. Native Codex (Pro on the Mac) and agy (research) stay outside this table.
+16 pi rows (4 ChatGPT, 6 Go, 2 Kimi, 4 Anthropic); 5 named by plugin recipes today. Native
+Codex (Pro on the Mac) and agy (research) stay outside this table.
