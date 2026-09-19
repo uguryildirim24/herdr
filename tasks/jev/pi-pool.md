@@ -34,12 +34,12 @@ the thinking levels the catalogue accepts for the row. Rolf cut the list to thes
 
 ## Anthropic
 
-| id | ctx | out | in/out $ | efforts |
-|---|---|---|---|---|
-| claude-fable-5-1 | 1M | 128k | 10 / 50 | minimal low medium high xhigh max |
-| claude-opus-5 | 1M | 128k | 5 / 25 | minimal low medium high xhigh max |
-| claude-sonnet-5 | 1M | 128k | 2 / 10 | off minimal low medium high xhigh max |
-| claude-haiku-4-5-20251001 | 200k | 64k | 1 / 5 | off minimal low medium high |
+| id | ctx | out | in/out $ | efforts | note |
+|---|---|---|---|---|---|
+| claude-fable-5-1 | 1M | 128k | 10 / 50 | minimal low medium high xhigh max | never a lane row (Rolf 2026-09-19) |
+| claude-opus-5 | 1M | 128k | 5 / 25 | minimal low medium high xhigh max | |
+| claude-sonnet-5 | 1M | 128k | 2 / 10 | off minimal low medium high xhigh max | |
+| claude-haiku-4-5-20251001 | 200k | 64k | 1 / 5 | off minimal low medium high | |
 
 ## Dropped by Rolf (2026-09-19)
 
