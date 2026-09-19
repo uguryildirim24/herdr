@@ -1,7 +1,7 @@
 id = "pi"
-version = "2026.09.14.1"
+version = "2026.09.19.1"
 min_engine_version = 1
-updated_at = "2026-09-14T00:00:00Z"
+updated_at = "2026-09-19T00:00:00Z"
 aliases = ["herdr:pi"]
 
 [[rules]]
@@ -19,3 +19,37 @@ priority = 100
 region = "bottom_non_empty_lines(12)"
 visible_working = true
 line_regex = ['^── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Working ─+$']
+
+# Pre-ready questions pi shows before its herdr extension reports. Screen
+# detection is the only reader there, so a pi pane waiting on a person would
+# otherwise read as idle. Captured 2026-09-19 with
+# `herdr agent read <pane> --source detection --format text` in a throwaway
+# session (pi 0.85.1, 30-column pane, prompt wraps).
+
+[[rules]]
+id = "trust_project_folder"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+visible_blocker = true
+all = [
+  { contains = ["trust project folder?"] },
+  { any = [
+    { line_regex = ['^\s*(?:→\s*)?Trust\b'] },
+    { line_regex = ['^\s*(?:→\s*)?Do not trust\b'] },
+  ] },
+]
+
+[[rules]]
+id = "missing_session_cwd"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+visible_blocker = true
+all = [
+  { regex = ['(?s)cwd from session file does\s+not exist'] },
+  { any = [
+    { line_regex = ['^\s*(?:→\s*)?Continue\b'] },
+    { line_regex = ['^\s*(?:→\s*)?Cancel\b'] },
+  ] },
+]

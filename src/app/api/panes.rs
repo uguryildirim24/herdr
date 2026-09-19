@@ -4757,6 +4757,7 @@ mod tests {
                 kind: "pi".into(),
                 pane_id: panes[0].clone(),
                 args: Vec::new(),
+                env: Default::default(),
                 timeout_ms: Some(4_000),
                 parent: Some(panes[1].clone()),
             }),

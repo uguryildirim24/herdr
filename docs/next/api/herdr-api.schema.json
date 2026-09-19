@@ -1340,6 +1340,13 @@
               },
               "type": "array"
             },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Extra launch environment for the pane's shell, persisted so a cold\nrestore hands it back to the respawned process.",
+              "type": "object"
+            },
             "kind": {
               "type": "string"
             },

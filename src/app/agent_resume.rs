@@ -811,4 +811,35 @@ mod tests {
         );
         assert_eq!(shell_command_from_argv(&[]), None);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_launch_env_merges_persisted_pane_env() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("restored");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist")
+            .launch_env = vec![("CODEX_HOME".into(), "/tmp/pro".into())];
+
+        let persisted = app.pane_launch_env(0, pane_id, Vec::new()).unwrap();
+        assert_eq!(
+            persisted.extra(),
+            &[("CODEX_HOME".to_string(), "/tmp/pro".to_string())]
+        );
+
+        let overridden = app
+            .pane_launch_env(0, pane_id, vec![("CODEX_HOME".into(), "/tmp/other".into())])
+            .unwrap();
+        assert_eq!(
+            overridden.extra(),
+            &[("CODEX_HOME".to_string(), "/tmp/other".to_string())]
+        );
+    }
 }

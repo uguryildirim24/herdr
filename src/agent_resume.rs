@@ -73,6 +73,13 @@ pub fn persisted_session_from_launch_args(
     agent: crate::detect::Agent,
     args: &[String],
 ) -> Option<PersistedAgentSession> {
+    if agent == crate::detect::Agent::Pi {
+        return pi_session_from_launch_args(args).map(|session_ref| PersistedAgentSession {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            session_ref,
+        });
+    }
     let [command, session_id] = args else {
         return None;
     };
@@ -85,6 +92,23 @@ pub fn persisted_session_from_launch_args(
         agent: "codex".into(),
         session_ref: AgentSessionRef::id(session_id.clone())?,
     })
+}
+
+/// pi's `--session <path|id>` from a launch, used when ADE restarts a thread
+/// on the same transcript. pi has no `-s`; an absolute path wins over an id.
+fn pi_session_from_launch_args(args: &[String]) -> Option<AgentSessionRef> {
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        let value = if let Some(value) = arg.strip_prefix("--session=") {
+            value.to_string()
+        } else if arg == "--session" {
+            args.next()?.clone()
+        } else {
+            continue;
+        };
+        return AgentSessionRef::path(value.clone()).or_else(|| AgentSessionRef::id(value));
+    }
+    None
 }
 
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
@@ -294,7 +318,10 @@ fn valid_session_id(value: &str) -> bool {
 }
 
 /// Drop flags that pick a session so native resume can own the id from the snapshot.
-pub(crate) fn strip_session_picking_args(args: &[String]) -> Vec<String> {
+pub(crate) fn strip_session_picking_args(agent: &str, args: &[String]) -> Vec<String> {
+    if agent == "pi" {
+        return strip_pi_session_args(args);
+    }
     const VALUE_FLAGS: &[&str] = &[
         "--resume",
         "-r",
@@ -331,6 +358,42 @@ pub(crate) fn strip_session_picking_args(args: &[String]) -> Vec<String> {
     out
 }
 
+/// pi's session-picking flags. Unlike Codex, `-c`/`--continue`/`-r`/`--resume`
+/// are booleans; only `--session`, `--fork` and `--session-id` take a value.
+/// pi has no `-s`.
+fn strip_pi_session_args(args: &[String]) -> Vec<String> {
+    const VALUE_FLAGS: &[&str] = &["--session", "--fork", "--session-id"];
+    const BOOL_FLAGS: &[&str] = &[
+        "-c",
+        "--continue",
+        "-r",
+        "--resume",
+        "--no-session",
+        "--fork-session",
+    ];
+    let mut out = Vec::new();
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        if BOOL_FLAGS.contains(&arg.as_str()) {
+            continue;
+        }
+        if VALUE_FLAGS.contains(&arg.as_str()) {
+            if args.peek().is_some_and(|next| !next.starts_with('-')) {
+                args.next();
+            }
+            continue;
+        }
+        if ["--session=", "--fork=", "--session-id="]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+        {
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
+}
+
 /// Replay stored `agent start` args after the native resume plan argv.
 pub fn plan_with_managed_args(
     source: &str,
@@ -350,7 +413,7 @@ pub fn plan_with_managed_args(
         );
         return Some(plan);
     }
-    let args = strip_session_picking_args(managed_args);
+    let args = strip_session_picking_args(agent, managed_args);
     if args.is_empty() {
         return Some(plan);
     }
@@ -427,6 +490,43 @@ mod tests {
                 "resume".into(),
                 "remote-session".into(),
             ]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn pi_launch_session_is_recorded_from_explicit_session() {
+        let pi_session = absolute_test_path("pi-session.jsonl");
+        let recorded = persisted_session_from_launch_args(
+            crate::detect::Agent::Pi,
+            &[
+                "--provider".into(),
+                "opencode-go".into(),
+                "--session".into(),
+                pi_session.clone(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(recorded.source, "herdr:pi");
+        assert_eq!(recorded.session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(recorded.session_ref.value, pi_session);
+
+        let by_id = persisted_session_from_launch_args(
+            crate::detect::Agent::Pi,
+            &["--session".into(), "0a1b2c3d".into()],
+        )
+        .unwrap();
+        assert_eq!(by_id.session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(by_id.session_ref.value, "0a1b2c3d");
+
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Pi,
+            &["--provider".into(), "opencode-go".into()]
+        )
+        .is_none());
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Pi,
+            &["--session".into(), "--no-skills".into()]
         )
         .is_none());
     }
@@ -949,22 +1049,60 @@ mod tests {
     #[test]
     fn strip_session_picking_args_keeps_codex_config_pairs() {
         assert_eq!(
-            strip_session_picking_args(&[
-                "--resume".into(),
-                "old".into(),
-                "--force".into(),
-                "--model".into(),
-                "m".into(),
-            ]),
+            strip_session_picking_args(
+                "codex",
+                &[
+                    "--resume".into(),
+                    "old".into(),
+                    "--force".into(),
+                    "--model".into(),
+                    "m".into(),
+                ]
+            ),
             vec!["--force", "--model", "m"]
         );
         assert_eq!(
-            strip_session_picking_args(&["-c".into(), "model=gpt".into(), "--force".into()]),
+            strip_session_picking_args(
+                "codex",
+                &["-c".into(), "model=gpt".into(), "--force".into()]
+            ),
             vec!["-c", "model=gpt", "--force"]
         );
         assert_eq!(
-            strip_session_picking_args(&["resume".into(), "--force".into()]),
+            strip_session_picking_args("codex", &["resume".into(), "--force".into()]),
             vec!["--force"]
+        );
+    }
+
+    #[test]
+    fn strip_session_picking_args_treats_pi_booleans_as_flags() {
+        // pi: `--session`/`--fork` take a value; `-c`/`--continue`/`-r`/
+        // `--resume`/`--no-session` do not. pi has no `-s`.
+        assert_eq!(
+            strip_session_picking_args(
+                "pi",
+                &[
+                    "--provider".into(),
+                    "opencode-go".into(),
+                    "--session".into(),
+                    "/tmp/lane.jsonl".into(),
+                    "-c".into(),
+                    "--no-skills".into(),
+                ]
+            ),
+            vec!["--provider", "opencode-go", "--no-skills"]
+        );
+        assert_eq!(
+            strip_session_picking_args(
+                "pi",
+                &[
+                    "--fork".into(),
+                    "/tmp/old.jsonl".into(),
+                    "--model".into(),
+                    "m".into()
+                ]
+            ),
+            vec!["--model", "m"]
         );
     }
 
@@ -1012,6 +1150,33 @@ mod tests {
                 .unwrap()
                 .argv,
             vec!["opencode", "--session", "sid"]
+        );
+        // pi keeps its recipe flags but drops a session picker from the
+        // replayed args, so exactly one `--session` survives (SPEC-pi §3.8).
+        let pi_session = absolute_test_path("pi-session.jsonl");
+        assert_eq!(
+            plan_with_managed_args(
+                "herdr:pi",
+                "pi",
+                &AgentSessionRef::path(&pi_session).unwrap(),
+                &[
+                    "--provider".into(),
+                    "opencode-go".into(),
+                    "--session".into(),
+                    "/tmp/old.jsonl".into(),
+                    "--no-skills".into(),
+                ],
+            )
+            .unwrap()
+            .argv,
+            vec![
+                "pi",
+                "--session",
+                pi_session.as_str(),
+                "--provider",
+                "opencode-go",
+                "--no-skills",
+            ]
         );
     }
 }

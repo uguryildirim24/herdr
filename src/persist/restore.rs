@@ -519,6 +519,9 @@ fn restore_tab(
         let managed_agent_args = saved_pane
             .map(|pane| pane.managed_agent_args.clone())
             .unwrap_or_default();
+        let saved_launch_env = saved_pane
+            .map(|pane| pane.launch_env.clone())
+            .unwrap_or_default();
         let saved_tokens = saved_pane
             .map(|pane| filtered_tokens(&pane.tokens, runtime_context.restore_token_keys))
             .unwrap_or_default();
@@ -550,7 +553,7 @@ fn restore_tab(
             .map(String::as_str);
         let launch_env = public_pane_id
             .map(|pane_id| {
-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(
+                PaneLaunchEnv::from_extra(saved_launch_env.clone()).with_identity(
                     workspace_id.to_string(),
                     crate::workspace::public_tab_id_for_number(workspace_id, number),
                     pane_id.to_string(),
@@ -581,7 +584,12 @@ fn restore_tab(
                 (Some(agent_name), None) => terminal.set_agent_name(agent_name),
                 (None, _) => {}
             }
-            apply_restored_pane_lineage(&mut terminal, &saved_tokens, &managed_agent_args);
+            apply_restored_pane_lineage(
+                &mut terminal,
+                &saved_tokens,
+                &managed_agent_args,
+                &saved_launch_env,
+            );
             if let Some(agent) = initial_restore_agent {
                 let _ = terminal.set_detected_state_with_screen_signals_at(
                     Some(agent),
@@ -681,7 +689,12 @@ fn restore_tab(
                     (Some(_), None) => {}
                     (None, _) => {}
                 }
-                apply_restored_pane_lineage(&mut terminal, &saved_tokens, &managed_agent_args);
+                apply_restored_pane_lineage(
+                    &mut terminal,
+                    &saved_tokens,
+                    &managed_agent_args,
+                    &saved_launch_env,
+                );
                 if let Some(agent) = initial_restore_agent {
                     let _ = terminal.set_detected_state_with_screen_signals_at(
                         Some(agent),
@@ -884,12 +897,14 @@ fn apply_restored_pane_lineage(
     terminal: &mut TerminalState,
     tokens: &HashMap<String, String>,
     managed_agent_args: &[String],
+    launch_env: &[(String, String)],
 ) {
     if !tokens.is_empty() {
         terminal.metadata_tokens =
             crate::metadata_tokens::MetadataTokens::from_values(tokens.clone());
     }
     terminal.managed_agent_args = managed_agent_args.to_vec();
+    terminal.launch_env = launch_env.to_vec();
 }
 
 fn drop_unresolved_parents(
@@ -1301,6 +1316,7 @@ mod tests {
                             launch_argv: None,
                             tokens: HashMap::new(),
                             managed_agent_args: Vec::new(),
+                            launch_env: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1386,6 +1402,7 @@ mod tests {
                                 launch_argv: None,
                                 tokens: HashMap::new(),
                                 managed_agent_args: Vec::new(),
+                                launch_env: Vec::new(),
                             },
                         ),
                         (
@@ -1399,6 +1416,7 @@ mod tests {
                                 launch_argv: None,
                                 tokens: HashMap::new(),
                                 managed_agent_args: Vec::new(),
+                                launch_env: Vec::new(),
                             },
                         ),
                     ]),
@@ -1455,6 +1473,7 @@ mod tests {
                     launch_argv: None,
                     tokens: HashMap::new(),
                     managed_agent_args: Vec::new(),
+                    launch_env: Vec::new(),
                 },
             )
         };
@@ -1472,6 +1491,7 @@ mod tests {
             launch_argv: None,
             tokens: HashMap::new(),
             managed_agent_args: Vec::new(),
+            launch_env: Vec::new(),
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1629,6 +1649,7 @@ mod tests {
                             launch_argv: None,
                             tokens: HashMap::new(),
                             managed_agent_args: Vec::new(),
+                            launch_env: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1795,6 +1816,7 @@ mod tests {
                 launch_argv: None,
                 tokens: HashMap::new(),
                 managed_agent_args: Vec::new(),
+                launch_env: Vec::new(),
             },
         );
         let history = SessionHistorySnapshot {
@@ -1867,6 +1889,7 @@ mod tests {
                 .map(|(key, value)| ((*key).into(), (*value).into()))
                 .collect(),
             managed_agent_args: args.iter().map(|arg| (*arg).into()).collect(),
+            launch_env: Vec::new(),
         }
     }
 

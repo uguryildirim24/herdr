@@ -116,6 +116,9 @@ pub struct PaneSnapshot {
     /// Args from `agent start`, replayed on cold native resume. Empty on older snapshots.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_agent_args: Vec<String>,
+    /// Extra launch environment for the pane shell. Empty on older snapshots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,6 +355,9 @@ fn capture_tab(
         let managed_agent_args = terminal
             .map(|terminal| terminal.managed_agent_args.clone())
             .unwrap_or_default();
+        let launch_env = terminal
+            .map(|terminal| terminal.launch_env.clone())
+            .unwrap_or_default();
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -384,6 +390,7 @@ fn capture_tab(
                 launch_argv,
                 tokens,
                 managed_agent_args,
+                launch_env,
             },
         );
     }
@@ -667,6 +674,7 @@ mod tests {
                 launch_argv: None,
                 tokens: HashMap::new(),
                 managed_agent_args: Vec::new(),
+                launch_env: Vec::new(),
             },
         );
         panes.insert(
@@ -680,6 +688,7 @@ mod tests {
                 launch_argv: None,
                 tokens: HashMap::new(),
                 managed_agent_args: Vec::new(),
+                launch_env: Vec::new(),
             },
         );
 
@@ -1236,6 +1245,7 @@ mod tests {
                 launch_argv: None,
                 tokens: HashMap::new(),
                 managed_agent_args: Vec::new(),
+                launch_env: Vec::new(),
             },
         );
         panes.insert(
@@ -1251,6 +1261,7 @@ mod tests {
                 launch_argv: None,
                 tokens: HashMap::new(),
                 managed_agent_args: Vec::new(),
+                launch_env: Vec::new(),
             },
         );
 

@@ -143,6 +143,12 @@ impl PaneLaunchEnv {
         self.identity = PaneLaunchIdentity::OmitPane;
         self
     }
+
+    /// Extra environment entries applied to the pane process. Persisted so a
+    /// cold restore can hand the same environment back to the respawned shell.
+    pub(crate) fn extra(&self) -> &[(String, String)] {
+        &self.extra
+    }
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {

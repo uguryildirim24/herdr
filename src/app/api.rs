@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
-mod env;
+pub(crate) mod env;
 mod integrations;
 mod layouts;
 mod pane_graphics;

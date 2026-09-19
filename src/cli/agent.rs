@@ -314,7 +314,7 @@ fn is_valid_pane_id(id: &str) -> bool {
 
 fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let Some(name) = args.first() else {
-        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [-- <agent-args...>]");
+        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [--env KEY=VALUE] [-- <agent-args...>]");
         return Ok(2);
     };
     let separator = args
@@ -325,6 +325,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let mut pane_id = None;
     let mut parent_pane_id = None;
     let mut timeout_ms = None;
+    let mut env = std::collections::HashMap::new();
     let mut index = 1;
     while index < separator {
         match args[index].as_str() {
@@ -369,6 +370,21 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                     Ok(timeout_ms) => Some(timeout_ms),
                     Err(exit_code) => return Ok(exit_code),
                 };
+                index += 2;
+            }
+            "--env" => {
+                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
+                    eprintln!("missing value for --env");
+                    return Ok(2);
+                };
+                let (key, value) = match super::parse_env_assignment(value) {
+                    Ok(pair) => pair,
+                    Err(message) => {
+                        eprintln!("{message}");
+                        return Ok(2);
+                    }
+                };
+                env.insert(key, value);
                 index += 2;
             }
             other => {
@@ -419,6 +435,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                 kind: kind.clone(),
                 pane_id: pane_id.clone(),
                 args: agent_args.clone(),
+                env: env.clone(),
                 timeout_ms,
                 parent: parent_pane_id.clone(),
             }),
@@ -1109,7 +1126,7 @@ fn print_agent_help() {
     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent attach <target> [--takeover]");
     eprintln!(
-        "  herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [-- <agent-args...>]"
+        "  herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [--env KEY=VALUE] [-- <agent-args...>]"
     );
     eprintln!("  herdr agent explain <target> [--json|--format text|json] [--verbose]");
     eprintln!(

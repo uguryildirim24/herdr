@@ -162,6 +162,10 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
+        let extra_env = match crate::app::api::env::normalize_launch_env(params.env) {
+            Ok(env) => env,
+            Err((code, message)) => return Err(AgentStartError::InvalidEnv(code, message)),
+        };
         let persisted_agent_session =
             crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
@@ -262,6 +266,16 @@ impl App {
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
         terminal.managed_agent_args = params.args;
+        for (key, value) in extra_env {
+            match terminal
+                .launch_env
+                .iter_mut()
+                .find(|(existing, _)| *existing == key)
+            {
+                Some(existing) => existing.1 = value,
+                None => terminal.launch_env.push((key, value)),
+            }
+        }
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
         }
@@ -290,6 +304,10 @@ impl App {
             AgentStartError::InvalidArgument => crate::api::schema::ErrorBody {
                 code: "invalid_agent_argument".into(),
                 message: "agent arguments cannot be encoded safely for the target shell".into(),
+            },
+            AgentStartError::InvalidEnv(code, message) => crate::api::schema::ErrorBody {
+                code,
+                message,
             },
             AgentStartError::InvalidTimeout => crate::api::schema::ErrorBody {
                 code: "invalid_agent_timeout".into(),
@@ -506,6 +524,7 @@ pub(super) enum AgentStartError {
     InvalidName,
     UnsupportedKind(String),
     InvalidArgument,
+    InvalidEnv(String, String),
     InvalidTimeout,
     TargetNotFound(String),
     TargetBusy(String),
@@ -605,6 +624,7 @@ mod tests {
             kind: "cursor".into(),
             pane_id: child_public.clone(),
             args: args.clone(),
+            env: Default::default(),
             timeout_ms: Some(4_000),
             parent: Some(parent_public.clone()),
         }) {
@@ -632,6 +652,7 @@ mod tests {
             kind: "cursor".into(),
             pane_id: child_public,
             args: args.clone(),
+            env: Default::default(),
             timeout_ms: Some(4_000),
             parent: Some(parent_public.clone()),
         }) {

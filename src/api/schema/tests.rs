@@ -99,6 +99,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             kind: "pi".into(),
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
+            env: Default::default(),
             timeout_ms: Some(30_000),
             parent: None,
         }),
@@ -119,6 +120,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             kind: "pi".into(),
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
+            env: Default::default(),
             timeout_ms: Some(30_000),
             parent: Some("w1:p1".into()),
         }),
@@ -179,6 +181,7 @@ fn agent_start_parent_is_optional_and_omitted_when_none() {
         kind: "pi".into(),
         pane_id: "w1:p2".into(),
         args: Vec::new(),
+        env: Default::default(),
         timeout_ms: None,
         parent: None,
     };
@@ -197,6 +200,7 @@ fn agent_start_parent_is_optional_and_omitted_when_none() {
         kind: "pi".into(),
         pane_id: "w1:p2".into(),
         args: Vec::new(),
+        env: Default::default(),
         timeout_ms: None,
         parent: Some("w1:p1".into()),
     };
