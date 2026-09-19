@@ -1,0 +1,19 @@
+Render a pixel-accurate mockup of a narrow terminal user interface, the whole image exactly 1536 by 1024 pixels. In the centre stands one tall, narrow terminal window about 60 characters wide, like a phone SSH client in portrait; the rest of the image is plain black. Everything inside is text on a monospaced character grid. Dark background #1e1e2e, soft white text #cdd6f4, dim grey secondary text #6c7086, one purple accent #cba6f7, green #a6e3a1 for one small state word. No other colours, no window chrome, no icons, no photos, no gradients, no blur.
+
+This is the phone layout of a "talk" tab: a chat between a person and a coordinator agent, in one column. Top to bottom:
+
+1. A two-row header on a slightly darker strip #181825. Row one: the project name "Adeherdr" in bold purple, then a small green dot and "idle". Row two in dim grey: "3 lanes · 1 needs you · 13:35", with "1 needs you" in purple.
+
+2. The timeline, full width, newest at the bottom, with real word wrapping so no word is ever cut. Entries:
+- "13:20  coordinator" in dim grey. Bold white: "The first live turn is running through the bridge now." Dim grey: "for you: Look at the bridge window and read the model name while it works."
+- "13:21  you" in purple with "accepted" in green at the right edge of that row. Purple: "thanks, go on".
+- "13:25  you chose 1" in purple, white: "I start it now and you watch the model name in the bridge window."
+- "13:30  coordinator" in dim grey. Bold white: "Three lanes run now." Dim grey: "for you: Nothing needs you yet."
+
+3. Above the input, a strip with a thin purple border titled "needs you · 1 of 1" in bold purple, showing only the selected question: bold white "Which model name did the bridge window show while the turn ran?" then choices with purple numbers "1  the strongest paid chat model", "2  some other name", "3  I did not see the window in time", "0  I did not understand the question".
+
+4. One input row: a purple ">" prompt and a block cursor, then dim grey placeholder "type, or 0-3 answers".
+
+5. One dim grey hint row: "Tab · Enter · Esc · PgUp".
+
+Sharp, high contrast, a real terminal screenshot look.

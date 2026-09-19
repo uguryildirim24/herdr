@@ -1,0 +1,13 @@
+Render a pixel-accurate close-up mockup of three question cards from a terminal user interface, exactly 1536 by 1024 pixels, as if a terminal screenshot were enlarged. Everything is text on a monospaced character grid, large and readable. Dark background #1e1e2e, soft white text #cdd6f4, dim grey secondary text #6c7086, one purple accent #cba6f7, green #a6e3a1 for one number. No other colours, no window chrome, no icons, no photos, no gradients, no blur.
+
+Stack three cards vertically with a little space between them, each about 90 characters wide.
+
+Card one, the open and selected question: a thin rounded PURPLE border. Above the border, a dim grey label row "13:22  question a-3". Inside: bold white "When do I run the first live turn?", then three lines with purple numbers: "1  I start it now and you watch the model name in the bridge window.", "2  I wait and you tell me when you are ready.", "0  I did not understand the question".
+
+Card two, an answered question, collapsed to a single row with no border: "13:25  you chose 1" in purple, then in white "I start it now and you watch the model name in the bridge window.", then the word "accepted" in green at the far right.
+
+Card three, a question that was asked again, collapsed to a single dim grey row with no border: "13:28  question a-2  asked again below".
+
+Below the three cards, one dim grey row: "0-2 answers the selected question · Tab next question".
+
+Sharp, high contrast, a real terminal screenshot look.
