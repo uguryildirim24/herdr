@@ -455,6 +455,11 @@ fn agent_command() -> Command {
                         .help("Wait for interactive readiness (default: 30000; max: 300000)"),
                 )
                 .arg(
+                    option("env", "KEY=VALUE")
+                        .action(ArgAction::Append)
+                        .help("Set and persist an environment entry; repeat for more entries"),
+                )
+                .arg(
                     Arg::new("agent_args")
                         .value_name("AGENT_ARG")
                         .num_args(0..)
@@ -1399,7 +1404,8 @@ mod tests {
         );
         assert!(has_option(agent_start, "pane"));
         assert!(has_option(agent_start, "parent"));
-        for legacy in ["cwd", "workspace", "tab", "split", "focus", "env", "argv"] {
+        assert!(has_option(agent_start, "env"));
+        for legacy in ["cwd", "workspace", "tab", "split", "focus", "argv"] {
             assert!(!has_option(agent_start, legacy), "legacy option --{legacy}");
         }
         assert!(agent_start

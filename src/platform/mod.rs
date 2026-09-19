@@ -361,15 +361,30 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
 pub(crate) fn interactive_unix_shell_command(
     argv: &[String],
     shell_name: &str,
+    launch_env: &[(String, String)],
     quote_posix_arg: fn(&str) -> String,
 ) -> Option<String> {
-    let quote = if is_powershell_process_name(shell_name) {
+    let powershell = is_powershell_process_name(shell_name);
+    let quote = if powershell {
         quote_powershell_arg
     } else {
         quote_posix_arg
     };
+    let mut command = String::new();
+    if !launch_env.is_empty() {
+        command.push_str(if powershell {
+            "& (Get-Command env -CommandType Application).Source"
+        } else {
+            "command env"
+        });
+        for (key, value) in launch_env {
+            command.push(' ');
+            command.push_str(&quote(&format!("{key}={value}")));
+        }
+        command.push(' ');
+    }
     let mut parts = argv.iter();
-    let mut command = quote(parts.next()?);
+    command.push_str(&quote(parts.next()?));
     for part in parts {
         command.push(' ');
         command.push_str(&quote(part));
@@ -615,12 +630,32 @@ mod tests {
             "@options".into(),
         ];
         assert_eq!(
-            interactive_shell_command(&argv, "bash").as_deref(),
+            interactive_shell_command(&argv, "bash", &[]).as_deref(),
             Some("pi '' 'two words' 'a'\\''b' '$HOME' 'semi;colon' @options")
         );
         assert_eq!(
-            interactive_shell_command(&argv, "pwsh").as_deref(),
+            interactive_shell_command(&argv, "pwsh", &[]).as_deref(),
             Some("pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'")
+        );
+        assert_eq!(
+            interactive_shell_command(
+                &argv[..1],
+                "bash",
+                &[("CODEX_HOME".into(), "/tmp/pro home".into())]
+            )
+            .as_deref(),
+            Some("command env 'CODEX_HOME=/tmp/pro home' pi")
+        );
+        assert_eq!(
+            interactive_shell_command(
+                &argv[..1],
+                "pwsh",
+                &[("CODEX_HOME".into(), "/tmp/pro home".into())]
+            )
+            .as_deref(),
+            Some(
+                "& (Get-Command env -CommandType Application).Source 'CODEX_HOME=/tmp/pro home' pi"
+            )
         );
     }
 

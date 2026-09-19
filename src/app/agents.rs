@@ -245,8 +245,9 @@ impl App {
                 .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
             let shell_name = available_shell_name(runtime)
                 .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
-            let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-                .ok_or(AgentStartError::InvalidArgument)?;
+            let command =
+                crate::platform::interactive_shell_command(&argv, &shell_name, &extra_env)
+                    .ok_or(AgentStartError::InvalidArgument)?;
             crate::app::api_helpers::encode_api_submission(runtime, &command)
         };
 

@@ -94,10 +94,11 @@ pub fn persisted_session_from_launch_args(
     })
 }
 
-/// pi's `--session <path|id>` from a launch, used when ADE restarts a thread
-/// on the same transcript. pi has no `-s`; an absolute path wins over an id.
+/// pi's last `--session <path|id>` from a launch, used when ADE restarts a
+/// thread on the same transcript. pi has no `-s`; absolute values are paths.
 fn pi_session_from_launch_args(args: &[String]) -> Option<AgentSessionRef> {
-    let mut args = args.iter().peekable();
+    let mut session = None;
+    let mut args = args.iter();
     while let Some(arg) = args.next() {
         let value = if let Some(value) = arg.strip_prefix("--session=") {
             value.to_string()
@@ -106,9 +107,9 @@ fn pi_session_from_launch_args(args: &[String]) -> Option<AgentSessionRef> {
         } else {
             continue;
         };
-        return AgentSessionRef::path(value.clone()).or_else(|| AgentSessionRef::id(value));
+        session = AgentSessionRef::path(value.clone()).or_else(|| AgentSessionRef::id(value));
     }
-    None
+    session
 }
 
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
@@ -518,6 +519,18 @@ mod tests {
         .unwrap();
         assert_eq!(by_id.session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(by_id.session_ref.value, "0a1b2c3d");
+
+        let last_wins = persisted_session_from_launch_args(
+            crate::detect::Agent::Pi,
+            &[
+                "--session=old-session".into(),
+                "--session".into(),
+                pi_session.clone(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(last_wins.session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(last_wins.session_ref.value, pi_session);
 
         assert!(persisted_session_from_launch_args(
             crate::detect::Agent::Pi,
