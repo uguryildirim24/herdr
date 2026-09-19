@@ -203,6 +203,236 @@ fn aggregate_agent_scroll_still_clamps_when_rows_shrink_on_activation() {
     assert_eq!(state.hits.endpoint_agents.len(), 2);
 }
 
+fn nested_agent(pane_id: &str, parent: Option<&str>) -> ClientShellAgent {
+    ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some(pane_id.into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: crate::api::schema::AgentStatus::Idle,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: parent
+            .map(|parent| vec![("parent".to_string(), parent.to_string())])
+            .unwrap_or_default(),
+        focused: false,
+    }
+}
+
+fn nesting_snapshot(boot_id: &str) -> ClientShellSnapshot {
+    let mut snapshot = snapshot();
+    snapshot.boot_id = boot_id.into();
+    // Flat order puts each lane before its coordinator, so nesting is visible in the result.
+    snapshot.agents = vec![
+        nested_agent("ws_1:p2", Some("ws_1:p1")),
+        nested_agent("ws_1:p3", Some("ws_1:p1")),
+        nested_agent("ws_1:p1", None),
+    ];
+    snapshot
+}
+
+/// Two machines, the same pane ids on each: one coordinator with two lanes per machine.
+fn aggregate_nesting_state(nesting: bool) -> (ClientShellState, ClientEndpointId) {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = nesting;
+    let mut state = ClientShellState::new(config);
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(nesting_snapshot("boot-local")));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(nesting_snapshot("boot-remote")));
+    (state, endpoint_id)
+}
+
+#[test]
+fn aggregate_agents_nest_per_endpoint_with_machine_qualified_keys() {
+    let (mut state, remote) = aggregate_nesting_state(true);
+    state.compose(100, 28).unwrap();
+
+    let order = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .map(|(_, endpoint, pane)| (endpoint.clone(), pane.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            (ClientEndpointId::Local, "ws_1:p1".into()),
+            (ClientEndpointId::Local, "ws_1:p2".into()),
+            (ClientEndpointId::Local, "ws_1:p3".into()),
+            (remote.clone(), "ws_1:p1".into()),
+            (remote.clone(), "ws_1:p2".into()),
+            (remote.clone(), "ws_1:p3".into()),
+        ]
+    );
+
+    // The same pane ids on both machines get machine-qualified collapse keys.
+    let keys = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .map(|(_, pane, key)| (pane.as_str(), key.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        vec![
+            ("ws_1:p1", "agent:Local:ws_1:p1"),
+            ("ws_1:p1", "agent:Build:ws_1:p1"),
+        ]
+    );
+}
+
+#[test]
+fn aggregate_collapsed_group_hides_lanes_on_that_machine_only() {
+    let (mut state, remote) = aggregate_nesting_state(true);
+    state.collapsed_groups.insert("agent:Build:ws_1:p1".into());
+    state.compose(100, 28).unwrap();
+
+    let order = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .map(|(_, endpoint, pane)| (endpoint.clone(), pane.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            (ClientEndpointId::Local, "ws_1:p1".into()),
+            (ClientEndpointId::Local, "ws_1:p2".into()),
+            (ClientEndpointId::Local, "ws_1:p3".into()),
+            (remote, "ws_1:p1".into()),
+        ]
+    );
+}
+
+#[test]
+fn aggregate_narrow_sidebar_keeps_nested_order() {
+    let (mut state, remote) = aggregate_nesting_state(true);
+    state.sidebar_collapsed = true;
+    state.compose(100, 28).unwrap();
+
+    let order = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .map(|(_, endpoint, pane)| (endpoint.clone(), pane.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            (ClientEndpointId::Local, "ws_1:p1".into()),
+            (ClientEndpointId::Local, "ws_1:p2".into()),
+            (ClientEndpointId::Local, "ws_1:p3".into()),
+            (remote.clone(), "ws_1:p1".into()),
+            (remote.clone(), "ws_1:p2".into()),
+            (remote, "ws_1:p3".into()),
+        ]
+    );
+}
+
+#[test]
+fn aggregate_agent_navigation_skips_collapsed_lanes() {
+    let (mut state, remote) = aggregate_nesting_state(true);
+    state.collapsed_groups.insert("agent:Build:ws_1:p1".into());
+
+    // Local coordinator and lanes, then the remote coordinator; the remote lanes are hidden.
+    let mut outcome = ClientShellInput::default();
+    assert!(
+        state.handle_endpoint_navigation(crate::input::KeybindAction::FocusAgent(3), &mut outcome,)
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "ws_1:p1"
+    ));
+
+    // The hidden remote lanes do not resolve to a target.
+    let mut hidden = ClientShellInput::default();
+    assert!(
+        state.handle_endpoint_navigation(crate::input::KeybindAction::FocusAgent(4), &mut hidden,)
+    );
+    assert!(hidden.actions.is_empty());
+}
+
+#[test]
+fn aggregate_agent_toggle_click_collapses_machine_group() {
+    let (mut state, remote) = aggregate_nesting_state(true);
+    state.compose(100, 28).unwrap();
+    let (rect, pane_id, key) = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(_, _, key)| key == "agent:Build:ws_1:p1")
+        .cloned()
+        .expect("remote coordinator toggle");
+    assert_eq!(pane_id, "ws_1:p1");
+
+    let click = state.handle_raw_events(vec![
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+    ]);
+    assert!(click.actions.is_empty(), "a group toggle must not focus");
+    assert!(state.collapsed_groups.contains(&key));
+
+    state.compose(100, 28).unwrap();
+    assert!(state
+        .hits
+        .endpoint_agents
+        .iter()
+        .any(|(_, endpoint, pane)| endpoint == &remote && pane == "ws_1:p1"));
+    assert!(!state
+        .hits
+        .endpoint_agents
+        .iter()
+        .any(|(_, endpoint, pane)| endpoint == &remote && pane != "ws_1:p1"));
+}
+
+#[test]
+fn aggregate_agents_stay_flat_when_nesting_is_off() {
+    let (mut state, _) = aggregate_nesting_state(false);
+    // Tall enough that every flat row is on screen before the assertion.
+    state.compose(100, 60).unwrap();
+
+    let rendered = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .map(|(_, endpoint, pane)| (endpoint.clone(), pane.clone()))
+        .collect::<Vec<_>>();
+    let expected = aggregate_navigation::aggregate_agent_rows(
+        &state.endpoints,
+        &state.active_endpoint_id,
+        state.config.agent_panel_sort,
+    )
+    .into_iter()
+    .map(|row| (row.endpoint.endpoint_id.clone(), row.agent.pane_id.clone()))
+    .collect::<Vec<_>>();
+    assert_eq!(rendered, expected);
+    // Flat order keeps each lane before its coordinator.
+    assert_eq!(rendered[0].1, "ws_1:p2");
+    assert!(state.hits.agent_group_toggles.is_empty());
+}
+
 #[test]
 fn same_machine_reboot_still_resets_agent_scroll() {
     let (mut state, _) = state_with_scrollable_agents();

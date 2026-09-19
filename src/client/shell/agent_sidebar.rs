@@ -441,12 +441,26 @@ pub(super) fn agent_rows(
     machine: Option<&str>,
 ) -> Vec<AgentRow> {
     let ordered = ordered_agent_pane_ids(snapshot, config.agent_panel_sort);
+    nested_agent_rows(snapshot, &ordered, config, collapsed_groups, machine)
+}
+
+/// Nested rows for one endpoint's agents. `ordered` is that endpoint's pane ids in its own
+/// configured order; nesting moves each child directly behind its parent. `collapsed_groups`
+/// is `None` (or the nesting flag off) for a flat list, and `machine` qualifies collapse keys
+/// and the `$machine` token. The single-endpoint and aggregate agent panels share this.
+pub(super) fn nested_agent_rows(
+    snapshot: &ClientShellSnapshot,
+    ordered: &[String],
+    config: &ClientShellConfig,
+    collapsed_groups: Option<&HashSet<String>>,
+    machine: Option<&str>,
+) -> Vec<AgentRow> {
     let Some(collapsed_groups) = collapsed_groups.filter(|_| config.agent_parent_nesting) else {
         return ordered
-            .into_iter()
+            .iter()
             .filter_map(|pane_id| {
                 build_agent_row(
-                    &pane_id,
+                    pane_id,
                     None,
                     0,
                     false,
@@ -462,7 +476,7 @@ pub(super) fn agent_rows(
             .collect();
     };
 
-    let tree_rows = super::agent_tree::nest_agents(&ordered, snapshot, collapsed_groups, machine);
+    let tree_rows = super::agent_tree::nest_agents(ordered, snapshot, collapsed_groups, machine);
     let last_child = super::agent_tree::last_child_flags(&tree_rows);
     let line_targets = super::agent_tree::tree_line_targets_below(&tree_rows);
     let lines_below = line_targets
@@ -511,27 +525,6 @@ pub(super) fn agent_rows(
         }
     }
     rows
-}
-
-pub(super) fn agent_row(
-    snapshot: &ClientShellSnapshot,
-    pane_id: &str,
-    config: &ClientShellConfig,
-    machine: Option<&str>,
-) -> Option<AgentRow> {
-    build_agent_row(
-        pane_id,
-        None,
-        0,
-        false,
-        Default::default(),
-        false,
-        0,
-        None,
-        snapshot,
-        config,
-        machine,
-    )
 }
 
 /// Dims the dragged row and marks the parent it would nest under with an accent bar in the

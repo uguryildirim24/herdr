@@ -6,7 +6,8 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::api::schema::AgentStatus;
 use crate::client::shell::agent_sidebar::{
-    agent_rows, render_agent_panel, render_agent_row, visible_agent_pane_ids, AgentRow,
+    agent_rows, nested_agent_rows, render_agent_panel, render_agent_row, visible_agent_pane_ids,
+    AgentRow,
 };
 use crate::protocol::ClientShellAgent;
 
@@ -560,6 +561,37 @@ fn machine_prefixed_group_key_reaches_the_toggle_hit() {
     let (_, pane_id, key) = toggles.first().expect("toggle hit");
     assert_eq!(pane_id, "p1");
     assert_eq!(key, "agent:remote:p1");
+}
+
+#[test]
+fn nested_agent_rows_scope_collapse_keys_to_the_machine() {
+    let mut snapshot = snapshot();
+    snapshot.agents = vec![
+        tree_agent("p1", AgentStatus::Working, 1, None),
+        tree_agent("p2", AgentStatus::Idle, 2, Some("p1")),
+    ];
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let ordered = vec!["p1".to_string(), "p2".to_string()];
+
+    // The machine-qualified key collapses that machine's coordinator.
+    let collapsed: HashSet<String> = ["agent:remote:p1".to_string()].into_iter().collect();
+    let rows = nested_agent_rows(
+        &snapshot,
+        &ordered,
+        &config,
+        Some(&collapsed),
+        Some("remote"),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].group_key.as_deref(), Some("agent:remote:p1"));
+    assert!(rows[0].collapsed);
+
+    // The unqualified key belongs to the single-endpoint panel and must not collapse it.
+    let bare: HashSet<String> = ["agent:p1".to_string()].into_iter().collect();
+    let rows = nested_agent_rows(&snapshot, &ordered, &config, Some(&bare), Some("remote"));
+    assert_eq!(rows.len(), 2);
+    assert!(!rows[0].collapsed);
 }
 
 #[test]

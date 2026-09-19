@@ -263,9 +263,10 @@ impl crate::agent_view_eval::AgentViewEntry for ClientAgentViewEntry<'_> {
 pub(super) fn online_agent_targets(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
-    sort: crate::config::AgentPanelSortConfig,
+    config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
 ) -> Vec<AggregateAgentTarget> {
-    aggregate_agent_rows(endpoints, active_endpoint_id, sort)
+    visible_aggregate_agent_rows(endpoints, active_endpoint_id, config, collapsed_groups)
         .into_iter()
         .filter(|row| !row.endpoint.stale())
         .map(|row| AggregateAgentTarget {
@@ -273,6 +274,53 @@ pub(super) fn online_agent_targets(
             pane_id: row.agent.pane_id.clone(),
         })
         .collect()
+}
+
+/// Aggregate rows in the order the panel draws them. With nesting on, children follow their
+/// parent per endpoint, and rows hidden under a collapsed group are left out, so agent
+/// navigation matches what the panel shows.
+pub(super) fn visible_aggregate_agent_rows<'a>(
+    endpoints: &'a [ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
+    config: &ClientShellConfig,
+    collapsed_groups: &HashSet<String>,
+) -> Vec<AggregateAgentRow<'a>> {
+    let flat = aggregate_agent_rows(endpoints, active_endpoint_id, config.agent_panel_sort);
+    if !config.agent_parent_nesting {
+        return flat;
+    }
+    let mut buckets = (0..endpoints.len())
+        .map(|_| Vec::new())
+        .collect::<Vec<Vec<AggregateAgentRow<'a>>>>();
+    for row in flat {
+        buckets[row.endpoint.endpoint_index].push(row);
+    }
+    let mut rows = Vec::new();
+    for (endpoint_index, bucket) in buckets.into_iter().enumerate() {
+        let endpoint = &endpoints[endpoint_index];
+        let Some(snapshot) = endpoint.snapshot.as_deref() else {
+            continue;
+        };
+        let ordered = bucket
+            .iter()
+            .map(|row| row.agent.pane_id.clone())
+            .collect::<Vec<_>>();
+        let mut by_pane_id = bucket
+            .into_iter()
+            .map(|row| (row.agent.pane_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        for tree_row in super::agent_tree::nest_agents(
+            &ordered,
+            snapshot,
+            collapsed_groups,
+            Some(&endpoint.label),
+        ) {
+            if let Some(row) = by_pane_id.remove(&tree_row.pane_id) {
+                rows.push(row);
+            }
+        }
+    }
+    rows
 }
 
 pub(super) fn navigator_rows(
