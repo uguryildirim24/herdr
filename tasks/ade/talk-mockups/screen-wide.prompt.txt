@@ -1,0 +1,82 @@
+Render a sharp terminal user interface mockup, exactly 1536 by 1024 pixels. Use the attached v1 wide picture as a visual style reference: keep its dark palette, purple accent, monospaced text, rounded question cards and restrained spacing. Replace its old layout with the project screen described below. |  |
+
+Everything is text on a monospaced character grid, approximately 128 columns by 56 rows. The image fills the canvas. No browser or desktop chrome, no icons, no photos, no gradients, no blur, no shadows, no graphical dashboard tiles.
+
+Colours: background #1e1e2e, darker header #181825, main text #cdd6f4, secondary text #a6adc8, dim text #6c7086, borders #45475a, purple accent #cba6f7, green #a6e3a1 and yellow #f9e2af. Use green and yellow sparingly for state words, delivery and progress. Everything should look like a real terminal, not a web application.
+
+The overview is a full-width fixed block ABOVE the chat. Do not put it beside the chat. It is about 26 text rows tall. Below it, the chat has a left timeline and a 36-character-wide right question panel. The input and hint rows span the bottom.
+
+HEADER: one darker row. Bold purple “Trading with Jeff”, a small yellow dot and “working”, then “2 open tasks”, then purple “1 need you”. Dim “chat 13:35” at the far right.
+
+OVERVIEW: one column of left padding. Six headings, in the following order, bold purple. Keep the sentences short and copy them exactly. Do not add dates, estimates, percentages or technical identifiers.
+
+Goal
+I want to build a trading bot with Jeff.
+
+What you get at the end
+A screen you open.
+It shows pretend trades and lets you stop them.
+
+How far along
+2 of 5 done ████████░░░░░░░░░░░░
+done Choose what the screen will show.
+done Draw the first screen.
+running Show pretend trades.
+left Add a way to stop it.
+left Check the whole thing together.
+
+Running now
+working Show pretend trades on the screen.
+checking Check that the trade list is right. box
+
+Finished lately
+The first screen is ready.
+The plan for the screen is set.
+
+Needs you
+May I spend $5 on this check?
+Decided for you
+routine I kept the words short.
+routine I used the same words in both views.
+Tell me what to change in the chat.
+
+Use normal terminal line spacing, not a blank line between every heading and its content. The blank lines in this prompt separate instructions; the screen should fit the overview in approximately 26 rows. Section headings and “Decided for you” are purple. Main sentences are soft white. “done” and the eight filled progress cells are green. The remaining twelve cells are dim. “running”, “working” and “checking” are yellow. “left”, “routine”, “box” and the final instruction are dim.
+
+A thin full-width terminal rule separates the overview from the chat.
+
+CHAT LEFT: preserve v1’s indented timeline, word wrapping, purple human text and dim timestamps. Include these entries:
+
+“13:25 you chose 1” in purple, followed by “Keep all trades pretend.” in white, with “accepted” in green at the right. This is a collapsed answered card, not an open box.
+
+“13:30 coordinator” in dim text.
+Indented bold white: “The first screen is ready.”
+Indented secondary text: “for you: You can see where each part will go.”
+
+“13:32 you” in purple, with green “accepted” at the far right.
+Indented purple: “Keep it easy to stop.”
+
+“13:33 question” in dim text.
+A rounded selected question card with a purple border:
+“May I spend $5 on this check?”
+“1 Yes, spend up to $5 once.”
+“2 No, keep it free.”
+“0 I did not understand the question”
+
+Do not show an internal question identifier.
+
+CHAT RIGHT: a 36-character-wide panel titled “needs you”, with a purple selected marker and rounded purple card. It shows the same currently open question and choices, wrapping naturally inside the panel:
+“May I spend $5 on this check?”
+“1 Yes, spend up to $5 once.”
+“2 No, keep it free.”
+“0 I did not understand the question”
+Dim “asked 13:33” below the choices.
+
+The overview shows the question sentence only. The answer choices belong to the chat cards. The timeline card and pinned panel are two views of the same question.
+
+BOTTOM: thin full-width separator, then purple “>” and a block cursor, with dim placeholder:
+“type a message · 0-2 answers the selected question”
+
+Final dim hint row:
+“F2 overview F6 scroll area Tab question Enter send Esc clear PgUp PgDn scroll”
+
+Do not invent extra work, extra questions or a completion percentage. Maintain readable type and word-boundary wrapping. The result should feel like the attached terminal screen grew a useful project overview above its existing chat.
