@@ -314,6 +314,23 @@ fn aggregate_collapsed_group_hides_lanes_on_that_machine_only() {
 }
 
 #[test]
+fn aggregate_nested_rows_keep_tree_lines_through_row_gaps() {
+    let (mut state, _) = aggregate_nesting_state(true);
+    state.config.agents.row_gap = 1;
+    let frame = state.compose(100, 28).unwrap();
+    let buffer = frame.to_ratatui_buffer().unwrap();
+    let parent = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .find(|(_, endpoint, pane)| endpoint.is_local() && pane == "ws_1:p1")
+        .map(|(rect, _, _)| *rect)
+        .expect("local coordinator row");
+
+    assert_eq!(buffer[(parent.x + 1, parent.bottom())].symbol(), "┃");
+}
+
+#[test]
 fn aggregate_narrow_sidebar_keeps_nested_order() {
     let (mut state, remote) = aggregate_nesting_state(true);
     state.sidebar_collapsed = true;

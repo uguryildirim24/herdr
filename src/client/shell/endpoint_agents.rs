@@ -92,6 +92,20 @@ pub(super) fn render_expanded(
             }
             hits.endpoint_agents
                 .push((rect, row.endpoint_id.clone(), row.agent.pane_id.clone()));
+            // `row_gap` rows below a nested row carry the same lines as its bottom padding.
+            // The last row never has lines below it, so no gap is drawn past the list.
+            let gap_end = rect
+                .bottom()
+                .saturating_add(config.agents.row_gap)
+                .min(hits.agent_body.bottom());
+            super::agent_sidebar::render_tree_lines(
+                buffer,
+                rect,
+                rect.bottom()..gap_end,
+                row.agent.tree_lines_below,
+                &row.agent.tree_line_status_below,
+                config,
+            );
         },
     );
 }
