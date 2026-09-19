@@ -559,6 +559,17 @@ fn aggregate_drag_state(label: &str) -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
+fn activate_test_endpoint(
+    state: &mut ClientShellState,
+    endpoint_id: &ClientEndpointId,
+    boot_id: &str,
+) {
+    assert!(state.activate_endpoint_projection(endpoint_id));
+    let mut pane_surface = surface();
+    pane_surface.boot_id = boot_id.into();
+    state.set_pane_surface(pane_surface);
+}
+
 #[test]
 fn aggregate_local_agent_toggle_click_collapses_local_group_only() {
     let (mut state, remote) = aggregate_single_lane_state("oci");
@@ -882,6 +893,7 @@ fn aggregate_live_shaped_fold_works() {
 #[test]
 fn aggregate_drag_lane_onto_its_own_coordinator_targets_that_machine() {
     let (mut state, remote) = aggregate_drag_state("oci");
+    activate_test_endpoint(&mut state, &remote, "boot-remote");
     state.compose(100, 28).unwrap();
     let source = endpoint_row(&state, &remote, "ws_1:p3");
     let target = endpoint_row(&state, &remote, "ws_1:p1");
@@ -903,6 +915,7 @@ fn aggregate_drag_lane_onto_its_own_coordinator_targets_that_machine() {
 #[test]
 fn aggregate_drag_across_machines_is_never_a_target() {
     let (mut state, remote) = aggregate_drag_state("oci");
+    activate_test_endpoint(&mut state, &remote, "boot-remote");
     state.compose(100, 28).unwrap();
     let source = endpoint_row(&state, &remote, "ws_1:p3");
     let target = endpoint_row(&state, &ClientEndpointId::Local, "ws_1:p1");
@@ -915,14 +928,16 @@ fn aggregate_drag_across_machines_is_never_a_target() {
 }
 
 #[test]
-fn aggregate_press_without_movement_focuses_the_lane() {
+fn aggregate_drag_on_inactive_machine_activates_it_without_sending_method() {
     let (mut state, remote) = aggregate_drag_state("oci");
     state.compose(100, 28).unwrap();
-    let lane = endpoint_row(&state, &remote, "ws_1:p3");
-    let at = (lane.x + 3, lane.y);
+    let source = endpoint_row(&state, &remote, "ws_1:p3");
+    let target = endpoint_row(&state, &remote, "ws_1:p1");
+    let at = |rect: Rect| (rect.x + 3, rect.y);
     let outcome = state.handle_raw_events(vec![
-        mouse_event(MouseEventKind::Down(MouseButton::Left), at),
-        mouse_event(MouseEventKind::Up(MouseButton::Left), at),
+        mouse_event(MouseEventKind::Down(MouseButton::Left), at(source)),
+        mouse_event(MouseEventKind::Drag(MouseButton::Left), at(target)),
+        mouse_event(MouseEventKind::Up(MouseButton::Left), at(target)),
     ]);
     assert!(matches!(
         outcome.actions.as_slice(),
@@ -931,11 +946,13 @@ fn aggregate_press_without_movement_focuses_the_lane() {
             target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
         }] if endpoint_id == &remote && pane_id == "ws_1:p3"
     ));
+    assert!(state.pending_requests.is_empty());
 }
 
 #[test]
 fn aggregate_drag_marks_the_target_row_like_the_single_panel() {
     let (mut state, remote) = aggregate_drag_state("oci");
+    activate_test_endpoint(&mut state, &remote, "boot-remote");
     state.compose(100, 28).unwrap();
     let source = endpoint_row(&state, &remote, "ws_1:p3");
     let target = endpoint_row(&state, &remote, "ws_1:p1");
@@ -977,6 +994,7 @@ fn aggregate_drop_onto_a_collapsed_remote_parent_opens_it() {
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+    activate_test_endpoint(&mut state, &endpoint_id, "boot-remote");
     state.collapsed_groups.insert("agent:oci:ws_1:p1".into());
     state.compose(100, 28).unwrap();
 

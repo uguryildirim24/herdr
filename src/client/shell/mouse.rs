@@ -614,8 +614,7 @@ impl ClientShellState {
             }
             AgentDropTarget::Unnest => None,
         };
-        self.push_endpoint_method_to(
-            &endpoint_id,
+        self.push_endpoint_method(
             crate::api::schema::Method::PaneReportMetadata(
                 crate::api::schema::PaneReportMetadataParams {
                     pane_id,
@@ -633,7 +632,6 @@ impl ClientShellState {
                     ttl_ms: None,
                 },
             ),
-            PendingEndpointKind::Generic,
             outcome,
         );
     }
@@ -2323,17 +2321,20 @@ impl ClientShellState {
                     return;
                 }
                 // The aggregate panel records agent rows in `hits.endpoint_agents` (the
-                // single-machine panel uses `hits.agents` below). With nesting on, focus waits
-                // for release so the row can be dragged onto a parent of its own machine.
+                // single-machine panel uses `hits.agents` below). Only the active machine owns a
+                // command surface, so its nested rows wait for release and can be dragged. A row
+                // on another machine falls through to activation before a later drag.
                 let endpoint_agent = self
                     .hits
                     .endpoint_agents
                     .iter()
                     .find(|(rect, _, _)| super::contains(*rect, point))
                     .map(|(_, endpoint_id, pane_id)| (endpoint_id.clone(), pane_id.clone()));
-                if let Some((endpoint_id, pane_id)) = endpoint_agent
-                    .filter(|_| self.config.agent_parent_nesting && self.config.mouse_capture)
-                {
+                if let Some((endpoint_id, pane_id)) = endpoint_agent.filter(|(endpoint_id, _)| {
+                    endpoint_id == &self.active_endpoint_id
+                        && self.config.agent_parent_nesting
+                        && self.config.mouse_capture
+                }) {
                     self.agent_press = Some(ClientAgentPress {
                         endpoint_id,
                         pane_id,
