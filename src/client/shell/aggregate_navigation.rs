@@ -273,12 +273,15 @@ pub(super) struct NestedAggregateRows<'a> {
 /// another machine. The pane id keeps its own colon, so the split only accepts a suffix that is
 /// itself a pane id (a bare `w1:p1` is one token, not the label `w1` plus `p1`).
 pub(super) fn split_machine_parent(token: &str) -> Option<(Option<&str>, &str)> {
-    if let Some((label, pane_id)) = token.split_once(':') {
-        if !label.is_empty() && is_pane_id(pane_id) {
-            return Some((Some(label), pane_id));
-        }
-    }
-    is_pane_id(token).then_some((None, token))
+    token
+        .match_indices(':')
+        .rev()
+        .find_map(|(index, _)| {
+            let (label, suffix) = token.split_at(index);
+            let pane_id = suffix.strip_prefix(':')?;
+            (!label.is_empty() && is_pane_id(pane_id)).then_some((Some(label), pane_id))
+        })
+        .or_else(|| is_pane_id(token).then_some((None, token)))
 }
 
 /// Whether a string has one of the public pane id shapes (`<workspace>:p<number>`,
@@ -343,12 +346,17 @@ pub(super) fn nested_aggregate_rows<'a>(
         };
         let parent_endpoint_index = match label {
             Some(label) => {
-                let Some(index) = endpoints
-                    .iter()
-                    .position(|endpoint| endpoint.label == label)
-                else {
+                let mut matches = endpoints.iter().enumerate().filter(|(index, endpoint)| {
+                    endpoint.label == label && by_key.contains_key(&(*index, pane_id))
+                });
+                let Some((index, _)) = matches.next() else {
                     continue;
                 };
+                // Labels are user-controlled and need not be unique. Never attach a child to
+                // whichever duplicate target happens to come first.
+                if matches.next().is_some() {
+                    continue;
+                }
                 index
             }
             None => row.endpoint.endpoint_index,
@@ -619,6 +627,10 @@ mod tests {
             Some((Some("oci"), "w1-2"))
         );
         assert_eq!(split_machine_parent("oci:p_5"), Some((Some("oci"), "p_5")));
+        assert_eq!(
+            split_machine_parent("us:east:ws_1:p1"),
+            Some((Some("us:east"), "ws_1:p1"))
+        );
         // A value that is not a pane id has no machine; it resolves to nothing and stays top
         // level in both panels.
         assert_eq!(split_machine_parent("missing"), None);

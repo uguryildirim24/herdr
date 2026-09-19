@@ -438,6 +438,39 @@ fn aggregate_nests_a_lane_under_its_coordinator_on_another_machine() {
 }
 
 #[test]
+fn aggregate_ambiguous_machine_label_keeps_child_top_level() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut first = remote_profile();
+    first.label = "box".into();
+    let mut second = first.clone();
+    second.id = ProfileId::parse("1123456789abcdef0123456789abcdef").unwrap();
+    let first_id = ClientEndpointId::Ssh(first.id.clone());
+    let second_id = ClientEndpointId::Ssh(second.id.clone());
+
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[first, second]);
+    state.set_endpoint_status(&first_id, ClientEndpointStatus::Online);
+    state.set_endpoint_status(&second_id, ClientEndpointStatus::Online);
+    let mut local = snapshot();
+    local.agents = vec![nested_agent("ws_1:p2", Some("box:ws_1:p1"))];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    for (endpoint_id, boot_id) in [(&first_id, "first-boot"), (&second_id, "second-boot")] {
+        let mut remote = snapshot();
+        remote.boot_id = boot_id.into();
+        remote.agents = vec![nested_agent("ws_1:p1", None)];
+        state.set_endpoint_snapshot(endpoint_id, Box::new(remote));
+    }
+
+    state.compose(100, 28).unwrap();
+    assert_eq!(
+        visible_agents(&state).first(),
+        Some(&(ClientEndpointId::Local, "ws_1:p2".into()))
+    );
+}
+
+#[test]
 fn aggregate_navigation_follows_a_cross_machine_child() {
     let (mut state, remote) = cross_machine_parent_state();
     state.compose(100, 28).unwrap();
