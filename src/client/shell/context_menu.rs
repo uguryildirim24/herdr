@@ -176,9 +176,12 @@ impl ClientShellState {
         }));
     }
 
-    /// Opens the agent row menu and reports whether it opened. The rendered rows are the
-    /// authority on which agents are parents, so the nesting rules (workspace scope, self
-    /// parenting, cycles) are never re-derived from raw tokens here.
+    /// Opens the agent row menu by pane id and reports whether it opened. The rendered rows are
+    /// the authority on which agents are parents, so the nesting rules (workspace scope, self
+    /// parenting, cycles) are never re-derived from raw tokens here. Single-machine rows have
+    /// unique pane ids; the aggregate panel resolves the machine-qualified key instead
+    /// (`open_agent_context_menu_for_key`).
+    #[cfg(test)]
     pub(super) fn open_agent_context_menu(&mut self, pane_id: &str, x: u16, y: u16) -> bool {
         let Some((_, _, key)) = self
             .hits
@@ -188,7 +191,13 @@ impl ClientShellState {
         else {
             return false;
         };
-        let key = key.clone();
+        self.open_agent_context_menu_for_key(key.clone(), x, y)
+    }
+
+    /// Opens the agent row menu for an already-resolved `collapsed_groups` key. The aggregate
+    /// panel has the same pane id on several machines, so the caller resolves the key from the
+    /// rendered row instead of looking it up by pane id.
+    pub(super) fn open_agent_context_menu_for_key(&mut self, key: String, x: u16, y: u16) -> bool {
         let collapsed = self.collapsed_groups.contains(&key);
         self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Agent {

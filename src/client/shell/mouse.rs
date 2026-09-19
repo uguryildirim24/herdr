@@ -569,7 +569,13 @@ impl ClientShellState {
     ) {
         let parent = match target {
             AgentDropTarget::Parent(parent) => {
-                let key = super::agent_tree::agent_group_key(None, &parent);
+                // The single-machine panel renders unqualified keys; the aggregate panel
+                // qualifies them per machine. Open the new parent with whichever key the panel
+                // that accepted the drop renders.
+                let machine = self
+                    .multi_endpoint_active()
+                    .then(|| self.active_endpoint_label().to_owned());
+                let key = super::agent_tree::agent_group_key(machine.as_deref(), &parent);
                 if self.collapsed_groups.remove(&key) {
                     self.persist_chrome_preferences(outcome);
                 }
@@ -1927,20 +1933,37 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
-                let agent_pane_id = (!self.sidebar_collapsed)
+                // The single-machine panel records whole-row agent hits in `hits.agents`; the
+                // aggregate panel records machine-qualified rows in `hits.endpoint_agents`.
+                // Resolve the rendered row's group key so a parent's menu opens for the machine
+                // that row belongs to (the same pane id can exist on several machines).
+                let row_rect = (!self.sidebar_collapsed)
                     .then(|| {
                         self.hits
                             .agents
                             .iter()
                             .find(|(rect, _)| super::contains(*rect, point))
-                            .map(|(_, pane_id)| pane_id.clone())
+                            .map(|(rect, _)| *rect)
+                            .or_else(|| {
+                                self.hits
+                                    .endpoint_agents
+                                    .iter()
+                                    .find(|(rect, _, _)| super::contains(*rect, point))
+                                    .map(|(rect, _, _)| *rect)
+                            })
                     })
                     .flatten();
-                if let Some(pane_id) = agent_pane_id {
-                    if self.open_agent_context_menu(&pane_id, mouse.column, mouse.row) {
-                        outcome.repaint = true;
-                        return;
-                    }
+                let agent_group_key = row_rect.and_then(|row_rect| {
+                    self.hits
+                        .agent_group_toggles
+                        .iter()
+                        .find(|(rect, _, _)| super::contains(row_rect, (rect.x, rect.y)))
+                        .map(|(_, _, key)| key.clone())
+                });
+                if let Some(key) = agent_group_key {
+                    self.open_agent_context_menu_for_key(key, mouse.column, mouse.row);
+                    outcome.repaint = true;
+                    return;
                 }
                 let tab_id = self
                     .hits

@@ -381,6 +381,381 @@ fn aggregate_agent_navigation_skips_collapsed_lanes() {
     assert!(hidden.actions.is_empty());
 }
 
+/// Two machines, each with one coordinator and one lane under it, and the remote labelled
+/// `label`. The pane ids match across machines, so a correct fold must be machine-qualified.
+fn aggregate_single_lane_state(label: &str) -> (ClientShellState, ClientEndpointId) {
+    fn single_lane_snapshot(boot_id: &str) -> ClientShellSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.boot_id = boot_id.into();
+        snapshot.agents = vec![
+            nested_agent("ws_1:p2", Some("ws_1:p1")),
+            nested_agent("ws_1:p1", None),
+        ];
+        snapshot
+    }
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut profile = remote_profile();
+    profile.label = label.into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    // The local snapshot boot id must match `surface()` so `compose` takes the real render
+    // path rather than the unavailable fallback.
+    state.set_snapshot(Box::new(single_lane_snapshot("boot-1")));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(single_lane_snapshot("boot-remote")));
+    (state, endpoint_id)
+}
+
+fn toggle_click(state: &mut ClientShellState, rect: Rect) -> ClientShellInput {
+    state.handle_raw_events(vec![
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+    ])
+}
+
+fn visible_agents(state: &ClientShellState) -> Vec<(ClientEndpointId, String)> {
+    state
+        .hits
+        .endpoint_agents
+        .iter()
+        .map(|(_, endpoint, pane)| (endpoint.clone(), pane.clone()))
+        .collect()
+}
+
+#[test]
+fn aggregate_local_agent_toggle_click_collapses_local_group_only() {
+    let (mut state, remote) = aggregate_single_lane_state("oci");
+    state.compose(100, 28).unwrap();
+    let (rect, pane_id, key) = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(_, _, key)| key == "agent:Local:ws_1:p1")
+        .cloned()
+        .expect("local coordinator toggle");
+    assert_eq!(pane_id, "ws_1:p1");
+
+    let click = toggle_click(&mut state, rect);
+    assert!(click.actions.is_empty(), "a group toggle must not focus");
+    assert_eq!(
+        state.collapsed_groups.iter().cloned().collect::<Vec<_>>(),
+        vec![key.clone()]
+    );
+
+    state.compose(100, 28).unwrap();
+    let visible = visible_agents(&state);
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p1".into())));
+    assert!(!visible.contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+    // The other machine is untouched.
+    assert!(visible.contains(&(remote.clone(), "ws_1:p1".into())));
+    assert!(visible.contains(&(remote, "ws_1:p2".into())));
+
+    // The collapsed parent's dot stack expands through the same key.
+    let stack = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(rect, _, key)| key == "agent:Local:ws_1:p1" && rect.x > 1)
+        .map(|(rect, _, _)| *rect)
+        .expect("collapsed dot-stack toggle");
+    let expand = toggle_click(&mut state, stack);
+    assert!(expand.actions.is_empty());
+    assert!(!state.collapsed_groups.contains(&key));
+    state.compose(100, 28).unwrap();
+    assert!(visible_agents(&state).contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+}
+
+#[test]
+fn aggregate_remote_agent_toggle_click_collapses_remote_group_only() {
+    let (mut state, remote) = aggregate_single_lane_state("oci");
+    state.compose(100, 28).unwrap();
+    let (rect, pane_id, key) = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(_, _, key)| key == "agent:oci:ws_1:p1")
+        .cloned()
+        .expect("remote coordinator toggle");
+    assert_eq!(pane_id, "ws_1:p1");
+
+    let click = toggle_click(&mut state, rect);
+    assert!(click.actions.is_empty(), "a group toggle must not focus");
+    assert_eq!(
+        state.collapsed_groups.iter().cloned().collect::<Vec<_>>(),
+        vec![key.clone()]
+    );
+
+    state.compose(100, 28).unwrap();
+    let visible = visible_agents(&state);
+    assert!(visible.contains(&(remote.clone(), "ws_1:p1".into())));
+    assert!(!visible.contains(&(remote, "ws_1:p2".into())));
+    // The local machine is untouched.
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p1".into())));
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+}
+
+#[test]
+fn aggregate_compact_sidebar_folds_local_group_only() {
+    let (mut state, remote) = aggregate_single_lane_state("oci");
+    state.sidebar_collapsed = true;
+    state.compose(100, 28).unwrap();
+
+    let local_row = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .find(|(_, endpoint, pane)| endpoint.is_local() && pane == "ws_1:p1")
+        .map(|(rect, _, _)| *rect)
+        .expect("local coordinator cell");
+    // The compact cell is `{machine initial}{status mark}`; the mark is the second column.
+    let status_mark = Rect::new(local_row.x.saturating_add(1), local_row.y, 1, 1);
+    let click = toggle_click(&mut state, status_mark);
+    assert!(
+        click.actions.is_empty(),
+        "a compact status mark must not focus"
+    );
+    assert!(state.collapsed_groups.contains("agent:Local:ws_1:p1"));
+
+    state.compose(100, 28).unwrap();
+    let visible = visible_agents(&state);
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p1".into())));
+    assert!(!visible.contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+    assert!(visible.contains(&(remote, "ws_1:p2".into())));
+}
+
+#[test]
+fn aggregate_local_agent_context_menu_folds_local_group_only() {
+    let (mut state, remote) = aggregate_single_lane_state("oci");
+    state.compose(100, 28).unwrap();
+    let local_row = state
+        .hits
+        .endpoint_agents
+        .iter()
+        .find(|(_, endpoint, pane)| endpoint.is_local() && pane == "ws_1:p1")
+        .map(|(rect, _, _)| *rect)
+        .expect("local coordinator row");
+
+    // Right-click the row body, not the status mark. The whole row is the menu target, and the
+    // machine's row (not the remote row with the same pane id) must win.
+    let open = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: local_row.x + 4,
+        row: local_row.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(open.actions.is_empty());
+    let toggle_index = match state.overlay.as_ref() {
+        Some(ClientShellOverlay::ContextMenu(menu)) => menu
+            .items()
+            .iter()
+            .position(|item| item.action == ClientContextMenuAction::ToggleGroup)
+            .expect("collapse menu item"),
+        _ => panic!("agent context menu"),
+    };
+    state.activate_context_menu_item(toggle_index, &mut ClientShellInput::default());
+    assert_eq!(
+        state.collapsed_groups.iter().cloned().collect::<Vec<_>>(),
+        vec!["agent:Local:ws_1:p1".to_string()]
+    );
+
+    state.compose(100, 28).unwrap();
+    let visible = visible_agents(&state);
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p1".into())));
+    assert!(!visible.contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+    assert!(visible.contains(&(remote, "ws_1:p2".into())));
+}
+
+/// The live Mac agent set (four spaces, two real trees) plus the same shape on the remote.
+fn live_shaped_snapshot(boot_id: &str) -> ClientShellSnapshot {
+    // (pane, workspace, tab, status, parent)
+    let entries: &[(&str, &str, &str, AgentStatus, Option<&str>)] = &[
+        ("w1G:p1", "w1G", "w1G:t1", AgentStatus::Working, None),
+        (
+            "w1G:p1V",
+            "w1G",
+            "w1G:t1Q",
+            AgentStatus::Working,
+            Some("w1G:p1"),
+        ),
+        ("w1H:p1", "w1H", "w1H:t1", AgentStatus::Idle, None),
+        (
+            "w1H:p3",
+            "w1H",
+            "w1H:t3",
+            AgentStatus::Working,
+            Some("w1H:p1"),
+        ),
+        (
+            "w1H:p4",
+            "w1H",
+            "w1H:t4",
+            AgentStatus::Working,
+            Some("w1H:p1"),
+        ),
+        (
+            "w1H:p6",
+            "w1H",
+            "w1H:t6",
+            AgentStatus::Working,
+            Some("w1H:p1"),
+        ),
+        (
+            "w1H:p9",
+            "w1H",
+            "w1H:t9",
+            AgentStatus::Working,
+            Some("w1H:p1"),
+        ),
+        ("w1J:p1", "w1J", "w1J:t1", AgentStatus::Idle, None),
+        ("w1K:p1", "w1K", "w1K:t1", AgentStatus::Idle, None),
+    ];
+    let mut snapshot = snapshot();
+    snapshot.boot_id = boot_id.into();
+    let mut workspaces = Vec::new();
+    let mut tabs = Vec::new();
+    let mut panes = Vec::new();
+    let mut agents = Vec::new();
+    for (index, (pane_id, workspace_id, tab_id, status, parent)) in entries.iter().enumerate() {
+        if !workspaces
+            .iter()
+            .any(|w: &ClientShellWorkspace| w.workspace_id == *workspace_id)
+        {
+            workspaces.push(ClientShellWorkspace {
+                workspace_id: (*workspace_id).into(),
+                active_tab_id: (*tab_id).into(),
+                number: workspaces.len() + 1,
+                label: (*workspace_id).into(),
+                focused: index == 0,
+                agent_status: *status,
+                ..snapshot.workspaces[0].clone()
+            });
+        }
+        tabs.push(ClientShellTab {
+            tab_id: (*tab_id).into(),
+            workspace_id: (*workspace_id).into(),
+            number: 1,
+            label: (*tab_id).into(),
+            custom_label: false,
+            zoomed: false,
+            focused: index == 0,
+            agent_status: *status,
+        });
+        panes.push(ClientShellPane {
+            pane_id: (*pane_id).into(),
+            workspace_id: (*workspace_id).into(),
+            tab_id: (*tab_id).into(),
+            label: None,
+            cwd: Some("/repo".into()),
+            foreground_cwd: Some("/repo".into()),
+            focused: index == 0,
+            right_click_passthrough: false,
+        });
+        agents.push(ClientShellAgent {
+            pane_id: (*pane_id).into(),
+            workspace_id: (*workspace_id).into(),
+            tab_id: (*tab_id).into(),
+            name: Some((*pane_id).into()),
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: *status,
+            state_change_seq: index as u64,
+            state_labels: Vec::new(),
+            tokens: parent
+                .map(|parent| vec![("parent".to_string(), parent.to_string())])
+                .unwrap_or_default(),
+            focused: index == 0,
+        });
+    }
+    snapshot.workspaces = workspaces;
+    snapshot.tabs = tabs;
+    snapshot.panes = panes;
+    snapshot.agents = agents;
+    snapshot.focused_workspace_id = Some("w1G".into());
+    snapshot.focused_tab_id = Some("w1G:t1".into());
+    snapshot.focused_pane_id = Some("w1G:p1".into());
+    snapshot
+}
+
+#[test]
+fn aggregate_live_shaped_fold_works() {
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.experimental.agent_parent_nesting = true;
+    config.ui.sidebar.agents.row_padding = 1;
+    config.ui.sidebar.agents.rows = vec![
+        vec![
+            AgentSidebarToken::StateIcon,
+            AgentSidebarToken::Workspace,
+            AgentSidebarToken::Tab,
+        ],
+        vec![AgentSidebarToken::StateText, AgentSidebarToken::Agent],
+    ];
+    let mut profile = remote_profile();
+    profile.label = "oci".into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(live_shaped_snapshot("boot-1")));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(live_shaped_snapshot("boot-remote")));
+    state.config.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    state.compose(120, 46).unwrap();
+
+    for key in ["agent:Local:w1G:p1", "agent:Local:w1H:p1"] {
+        let toggles = state.hits.agent_group_toggles.clone();
+        let Some((rect, _, _)) = toggles.iter().find(|(_, _, k)| k == key) else {
+            panic!(
+                "toggle {key} missing; visible={:?} toggles={toggles:?}",
+                visible_agents(&state)
+            );
+        };
+        let click = toggle_click(&mut state, *rect);
+        assert!(
+            click.actions.is_empty(),
+            "{key} must not focus (rect={rect:?})"
+        );
+        state.compose(120, 46).unwrap();
+    }
+    let mut collapsed = state.collapsed_groups.iter().cloned().collect::<Vec<_>>();
+    collapsed.sort();
+    assert_eq!(
+        collapsed,
+        vec![
+            "agent:Local:w1G:p1".to_string(),
+            "agent:Local:w1H:p1".to_string()
+        ]
+    );
+    let visible = visible_agents(&state);
+    assert!(!visible.iter().any(|(endpoint, pane)| endpoint.is_local()
+        && matches!(
+            pane.as_str(),
+            "w1G:p1V" | "w1H:p3" | "w1H:p4" | "w1H:p6" | "w1H:p9"
+        )));
+    // The remote machine still shows its own lanes.
+    assert!(visible
+        .iter()
+        .any(|(endpoint, pane)| !endpoint.is_local() && pane == "w1G:p1V"));
+}
+
 #[test]
 fn aggregate_agent_toggle_click_collapses_machine_group() {
     let (mut state, remote) = aggregate_nesting_state(true);

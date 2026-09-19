@@ -40,6 +40,16 @@ pub(super) fn render_collapsed(
                     Modifier::empty()
                 }),
         );
+        // A parent's status mark folds its group, exactly like the single-endpoint compact
+        // sidebar; the key is machine-qualified for the aggregate. The mark is the second
+        // column, after the machine's initial.
+        if let Some(key) = row.agent.group_key.filter(|_| rect.width > 1) {
+            hits.agent_group_toggles.push((
+                Rect::new(rect.x.saturating_add(1), rect.y, 1, 1),
+                row.agent.pane_id.clone(),
+                key,
+            ));
+        }
         hits.endpoint_agents
             .push((rect, row.endpoint_id, row.agent.pane_id));
     }
