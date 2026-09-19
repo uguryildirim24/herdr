@@ -312,6 +312,19 @@ fn is_valid_pane_id(id: &str) -> bool {
     false
 }
 
+/// A `parent` value: a bare pane id for this machine, or `<machine label>:<pane_id>` for a pane
+/// on another machine. The pane id keeps its own colon, so the split only accepts a suffix that
+/// is itself a pane id.
+fn is_valid_parent_token(value: &str) -> bool {
+    if is_valid_pane_id(value) {
+        return true;
+    }
+    let Some((label, pane_id)) = value.split_once(':') else {
+        return false;
+    };
+    !label.trim().is_empty() && is_valid_pane_id(pane_id)
+}
+
 fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let Some(name) = args.first() else {
         eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--parent PANE_ID] [--timeout MS] [--env KEY=VALUE] [-- <agent-args...>]");
@@ -354,7 +367,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                     eprintln!("missing value for --parent");
                     return Ok(2);
                 };
-                if !is_valid_pane_id(value) {
+                if !is_valid_parent_token(value) {
                     eprintln!("invalid pane id: {value}");
                     return Ok(2);
                 }
@@ -910,7 +923,7 @@ fn agent_set_parent(args: &[String]) -> std::io::Result<i32> {
     let parent_token = if value == "--clear" {
         None
     } else {
-        if !is_valid_pane_id(value) {
+        if !is_valid_parent_token(value) {
             eprintln!("invalid pane id: {value}");
             return Ok(2);
         }
@@ -1169,6 +1182,19 @@ mod tests {
         assert!(!is_valid_pane_id("w1:pinvalid"));
         assert!(!is_valid_pane_id("1-"));
         assert!(!is_valid_pane_id("-1"));
+    }
+
+    #[test]
+    fn is_valid_parent_token_accepts_a_machine_label() {
+        assert!(is_valid_parent_token("w1:p1"));
+        assert!(is_valid_parent_token("Local:w1:p1"));
+        assert!(is_valid_parent_token("oci:w1-2"));
+        assert!(is_valid_parent_token("oci:p_5"));
+
+        assert!(!is_valid_parent_token(""));
+        assert!(!is_valid_parent_token("invalid"));
+        assert!(!is_valid_parent_token("Local:"));
+        assert!(!is_valid_parent_token("Local:not-a-pane"));
     }
 
     #[test]

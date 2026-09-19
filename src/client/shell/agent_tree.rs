@@ -3,6 +3,9 @@ use std::collections::{HashMap, HashSet};
 use super::ClientShellSnapshot;
 
 pub(super) struct AgentTreeRow {
+    /// Position in the input list this row was built from; the aggregate panel maps it back to
+    /// the endpoint-qualified agent because the same pane id can exist on several machines.
+    pub(super) index: usize,
     pub(super) pane_id: String,
     /// 0 = top level; true depth, no clamp here
     pub(super) depth: usize,
@@ -14,6 +17,9 @@ pub(super) struct AgentTreeRow {
     pub(super) hidden_descendants: usize,
     /// those hidden descendants counted per status; all zero unless hidden_descendants > 0
     pub(super) hidden_status_counts: StatusCounts,
+    /// `collapsed_groups` key for this row when it has children; the builder qualifies it with
+    /// the row's own machine so the same pane id on two machines folds independently.
+    pub(super) group_key: String,
 }
 
 /// Agents counted per status, indexed by `status_severity`.
@@ -86,17 +92,47 @@ pub(super) fn nest_agents(
         }
     }
 
+    let parent_of = local_parent_of(ordered, &ordered_agents, &order_to_index);
+    let statuses = ordered_agents
+        .iter()
+        .map(|agent| agent.map(|agent| agent.agent_status))
+        .collect::<Vec<_>>();
+    let group_keys = ordered
+        .iter()
+        .map(|pane_id| agent_group_key(machine, pane_id))
+        .collect::<Vec<_>>();
+    build_tree_rows(
+        ordered,
+        &statuses,
+        &group_keys,
+        &parent_of,
+        collapsed_groups,
+    )
+}
+
+/// The last `parent` token of an agent, if any.
+pub(super) fn parent_token(agent: &crate::protocol::ClientShellAgent) -> Option<&str> {
+    agent
+        .tokens
+        .iter()
+        .rev()
+        .find_map(|(key, value)| (key == "parent").then_some(value.as_str()))
+}
+
+/// Parent edges for one endpoint's ordered agents. A `parent` token is matched against this
+/// endpoint's pane ids only, so a cross-machine token (`<machine>:<pane_id>`) is left alone here
+/// and resolved by the aggregate builder once the endpoint labels are known.
+fn local_parent_of(
+    ordered: &[String],
+    ordered_agents: &[Option<&crate::protocol::ClientShellAgent>],
+    order_to_index: &HashMap<&str, usize>,
+) -> Vec<Option<usize>> {
     let mut parent_of = vec![None; ordered.len()];
     for (index, pane_id) in ordered.iter().enumerate() {
         let Some(agent) = ordered_agents[index] else {
             continue;
         };
-        let Some(parent) = agent
-            .tokens
-            .iter()
-            .rev()
-            .find_map(|(key, value)| (key == "parent").then_some(value.as_str()))
-        else {
+        let Some(parent) = parent_token(agent) else {
             continue;
         };
         if parent == pane_id {
@@ -113,9 +149,22 @@ pub(super) fn nest_agents(
         }
         parent_of[index] = Some(parent_index);
     }
+    parent_of
+}
 
-    let cycle = detect_cycles(&parent_of, &ordered_agents);
-    let mut children = vec![Vec::new(); ordered.len()];
+/// Build rows for `pane_ids` from a resolved parent map. `statuses[i]` is `None` when the row
+/// is not present in this list, `group_keys[i]` is row `i`'s `collapsed_groups` key, and
+/// `parent_of[i]` is an index into the same arrays. Shared by the single-endpoint panel and the
+/// aggregate panel, which resolves parents across machines first.
+pub(super) fn build_tree_rows(
+    pane_ids: &[String],
+    statuses: &[Option<crate::api::schema::AgentStatus>],
+    group_keys: &[String],
+    parent_of: &[Option<usize>],
+    collapsed_groups: &HashSet<String>,
+) -> Vec<AgentTreeRow> {
+    let cycle = detect_cycles(parent_of, statuses);
+    let mut children = vec![Vec::new(); pane_ids.len()];
     for (index, maybe_parent) in parent_of.iter().copied().enumerate() {
         let Some(parent) = maybe_parent else {
             continue;
@@ -126,17 +175,12 @@ pub(super) fn nest_agents(
         children[parent].push(index);
     }
 
-    let statuses: Vec<Option<crate::api::schema::AgentStatus>> = ordered_agents
-        .iter()
-        .map(|agent| agent.map(|agent| agent.agent_status))
-        .collect();
-
-    let mut subtree_counts: Vec<Option<usize>> = vec![None; ordered.len()];
-    let mut subtree_statuses: Vec<StatusCounts> = vec![StatusCounts::default(); ordered.len()];
-    for index in 0..ordered.len() {
+    let mut subtree_counts: Vec<Option<usize>> = vec![None; pane_ids.len()];
+    let mut subtree_statuses: Vec<StatusCounts> = vec![StatusCounts::default(); pane_ids.len()];
+    for index in 0..pane_ids.len() {
         aggregate_descendants(
             index,
-            &statuses,
+            statuses,
             &children,
             &mut subtree_counts,
             &mut subtree_statuses,
@@ -144,10 +188,10 @@ pub(super) fn nest_agents(
     }
 
     let mut rows = Vec::new();
-    for index in 0..ordered.len() {
-        let Some(_) = ordered_agents[index] else {
+    for index in 0..pane_ids.len() {
+        if statuses[index].is_none() {
             continue;
-        };
+        }
         // Cycle members are roots even though they carry a parent edge; every other node
         // with a parent is emitted by its parent's subtree walk.
         if parent_of[index].is_some() && !cycle[index] {
@@ -156,10 +200,10 @@ pub(super) fn nest_agents(
         emit_tree_rows(
             index,
             0,
-            ordered,
+            pane_ids,
             &children,
             collapsed_groups,
-            machine,
+            group_keys,
             &subtree_counts,
             &subtree_statuses,
             &mut rows,
@@ -237,13 +281,13 @@ pub(super) fn tree_line_targets_below(
 
 fn detect_cycles(
     parent_of: &[Option<usize>],
-    ordered_agents: &[Option<&crate::protocol::ClientShellAgent>],
+    statuses: &[Option<crate::api::schema::AgentStatus>],
 ) -> Vec<bool> {
     let mut state = vec![0u8; parent_of.len()];
     let mut cycle = vec![false; parent_of.len()];
 
     for start in 0..parent_of.len() {
-        if ordered_agents[start].is_none() || state[start] != 0 {
+        if statuses[start].is_none() || state[start] != 0 {
             continue;
         }
 
@@ -256,7 +300,7 @@ fn detect_cycles(
                 let Some(parent) = parent_of[cursor] else {
                     break;
                 };
-                if ordered_agents[parent].is_none() {
+                if statuses[parent].is_none() {
                     break;
                 }
                 cursor = parent;
@@ -320,7 +364,7 @@ fn emit_tree_rows(
     ordered: &[String],
     children: &[Vec<usize>],
     collapsed_groups: &HashSet<String>,
-    machine: Option<&str>,
+    group_keys: &[String],
     subtree_counts: &[Option<usize>],
     subtree_statuses: &[StatusCounts],
     rows: &mut Vec<AgentTreeRow>,
@@ -330,7 +374,7 @@ fn emit_tree_rows(
 
     while let Some((row_index, row_depth)) = stack.pop() {
         let child_count = children[row_index].len();
-        let key = agent_group_key(machine, ordered[row_index].as_str());
+        let key = group_keys[row_index].clone();
         let collapsed = child_count > 0 && collapsed_groups.contains(&key);
         let hidden_descendants = if collapsed {
             subtree_counts[row_index].unwrap_or_default()
@@ -344,12 +388,14 @@ fn emit_tree_rows(
         };
 
         rows.push(AgentTreeRow {
+            index: row_index,
             pane_id: ordered[row_index].clone(),
             depth: row_depth,
             child_count,
             collapsed,
             hidden_descendants,
             hidden_status_counts,
+            group_key: key,
         });
 
         if collapsed {

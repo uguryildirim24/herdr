@@ -485,15 +485,17 @@ agent_parent_nesting = true
 
 The default value is `false`. When `false`, the Agents panel renders flat. When `true` and no pane has a `parent` token, the panel also renders flat.
 
-**Lineage contract**: Lineage uses one pane metadata token named `parent`. The value is the pane ID of the owning agent (for example, `w1:p1`). Herdr only reads this token. Herdr does not infer lineage from pane creation.
+**Lineage contract**: Lineage uses one pane metadata token named `parent`. The value is either a pane ID on the same machine (for example, `w1:p1`) or a machine label and a pane ID joined by a colon (for example, `oci:w1:p1`). The label is the one the sidebar uses: `Local` for the machine you are on, or a saved machine's label from `herdr machine list`. Herdr only reads this token. Herdr does not infer lineage from pane creation.
 
 **Nesting rules**: An agent pane nests under a parent agent pane when:
-- The child agent's `parent` token matches the parent's `pane_id`.
+- The child agent's `parent` token names the parent's pane ID, with or without the parent's machine label.
 - The parent agent is present in the same ordered agent list.
-- Both agents belong to the same workspace on the same machine.
 - The parent is not the child itself.
+- A parent on the child's own machine belongs to the same workspace as the child.
 
 If any condition is not met, the child agent remains a top-level row. If a cycle exists, all agents in the cycle remain top-level rows. Indentation increases by three columns per depth level, clamped at depth 3. The tree line hangs from the parent's status mark and branches (`┣━━`, `┗━━`) into each child's status mark. Each line segment is drawn dimmed in the status color of the agent it leads to, so a branch shows its child's status and a rail shows the status of the next agent it reaches. Because a child shares its parent's workspace, a child with an agent name or label shows that label where its `workspace` token would repeat the parent's workspace name, and its `agent` token is dropped.
+
+**Cross-machine parents**: With more than one machine attached, a `parent` token that names another machine draws the child under that parent's row, inside the parent's section of the Agents panel, with the machine's initial as a small mark on the child row. Collapse, the dot stack, the right-click menu, and agent navigation treat the child like any other nested agent. Dragging a row can only nest it on its own machine; set a cross-machine parent through the token instead, because the parent pane does not exist on the child's server. In a single-machine list, an agent whose parent lives on another machine stays at the top level and keeps the same machine mark.
 
 **Collapse behavior**: A parent agent's own status mark is its collapse toggle: click it to collapse or expand its child agents, or use Collapse and Expand in the agent's right-click menu. Herdr saves collapse state in client preferences under `agent:<pane_id>` (or `agent:<machine>:<pane_id>` for multi-machine setups). When collapsed:
 - The sidebar hides the entire child subtree.
@@ -514,6 +516,9 @@ herdr agent start worker --kind pi --pane w1:p2 --parent w1:p1
 
 # Link an existing agent to a parent pane
 herdr agent set-parent worker w1:p1
+
+# Link an existing agent to a parent pane on another machine
+herdr agent set-parent worker oci:w1:p1
 
 # Clear parent lineage
 herdr agent set-parent worker --clear

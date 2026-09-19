@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::render::put_text;
 use super::*;
@@ -136,8 +136,8 @@ pub(super) struct EndpointAgentRow {
 }
 
 /// Aggregate agent rows in panel order. With nesting off the aggregate order is final. With
-/// nesting on, each endpoint's agents are nested with that machine's label as the collapse
-/// key, the way the single-endpoint panel nests, and the machines are laid out in order.
+/// nesting on, the endpoints' agents are nested together: a bare `parent` token means the same
+/// machine, a `<machine>:<pane>` token names another, and the machines are laid out in order.
 /// `collapsed_groups` is the shared agent group set.
 pub(super) fn agent_rows(
     endpoints: &[ClientShellEndpoint],
@@ -176,38 +176,76 @@ pub(super) fn agent_rows(
             .collect();
     }
 
-    let mut ordered_by_endpoint = HashMap::<usize, Vec<String>>::new();
-    for row in &aggregate {
-        ordered_by_endpoint
-            .entry(row.endpoint.endpoint_index)
-            .or_default()
-            .push(row.agent.pane_id.clone());
-    }
+    let nested =
+        super::aggregate_navigation::nested_aggregate_rows(aggregate, endpoints, collapsed_groups);
+    let tree_rows = &nested.trees;
+    let last_child = super::agent_tree::last_child_flags(tree_rows);
+    let line_targets = super::agent_tree::tree_line_targets_below(tree_rows);
+    let lines_below = line_targets
+        .iter()
+        .map(super::agent_tree::tree_line_mask)
+        .collect::<Vec<_>>();
+    let statuses = nested
+        .rows
+        .iter()
+        .map(|row| Some(row.agent.agent_status))
+        .collect::<Vec<_>>();
+    let endpoint_of = nested
+        .rows
+        .iter()
+        .map(|row| row.endpoint.endpoint_index)
+        .collect::<Vec<_>>();
+    let workspace_of = nested
+        .rows
+        .iter()
+        .map(|row| row.agent.workspace_id.as_str())
+        .collect::<Vec<_>>();
 
-    let mut rows = Vec::new();
-    for (endpoint_index, endpoint) in endpoints.iter().enumerate() {
-        let Some(snapshot) = endpoint.snapshot.as_deref() else {
-            continue;
-        };
-        let Some(ordered) = ordered_by_endpoint.remove(&endpoint_index) else {
-            continue;
-        };
-        let stale = endpoint.status != ClientEndpointStatus::Online;
-        for mut agent in super::agent_sidebar::nested_agent_rows(
-            snapshot,
-            &ordered,
+    let mut rows = Vec::with_capacity(nested.rows.len());
+    // Visible rows come depth-first, so a row's parent is the last row seen one level up.
+    let mut ancestors: Vec<usize> = Vec::new();
+    for (index, (nested_row, tree_row)) in nested.rows.iter().zip(tree_rows).enumerate() {
+        ancestors.truncate(tree_row.depth);
+        let parent = tree_row
+            .depth
+            .checked_sub(1)
+            .and_then(|level| ancestors.get(level))
+            .copied();
+        ancestors.push(index);
+        // A parent on another machine is not in this snapshot, so only a same-endpoint parent
+        // can rename the child's workspace token.
+        let parent_workspace_id = parent
+            .filter(|&parent| endpoint_of[parent] == endpoint_of[index])
+            .map(|parent| workspace_of[parent]);
+        let Some(mut agent) = super::agent_sidebar::build_agent_row(
+            &tree_row.pane_id,
+            parent_workspace_id,
+            tree_row.depth,
+            tree_row.collapsed,
+            tree_row.hidden_status_counts,
+            last_child[index],
+            lines_below[index],
+            (tree_row.child_count > 0).then(|| tree_row.group_key.clone()),
+            nested_row.endpoint.snapshot,
             config,
-            Some(collapsed_groups),
-            Some(&endpoint.label),
-        ) {
-            agent.focused &= &endpoint.endpoint_id == active_endpoint_id;
-            rows.push(EndpointAgentRow {
-                endpoint_id: endpoint.endpoint_id.clone(),
-                machine_label: endpoint.label.clone(),
-                stale,
-                agent,
-            });
+            Some(nested_row.endpoint.label),
+        ) else {
+            continue;
+        };
+        agent.tree_line_status_below =
+            line_targets[index].map(|target| target.and_then(|target| statuses[target]));
+        agent.focused &= nested_row.endpoint.endpoint_id == active_endpoint_id;
+        // A lane drawn in its parent's section but running on another machine gets that
+        // machine's letter, the way the narrow rail marks machines.
+        if parent.is_some_and(|parent| endpoint_of[parent] != endpoint_of[index]) {
+            agent.machine_mark = nested_row.endpoint.label.chars().next();
         }
+        rows.push(EndpointAgentRow {
+            endpoint_id: nested_row.endpoint.endpoint_id.clone(),
+            machine_label: nested_row.endpoint.label.to_owned(),
+            stale: nested_row.endpoint.stale(),
+            agent,
+        });
     }
     rows
 }

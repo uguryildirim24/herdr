@@ -29,6 +29,9 @@ pub(super) struct AgentRow {
         [Option<crate::api::schema::AgentStatus>; super::agent_tree::TREE_LINE_COLUMNS],
     /// `collapsed_groups` key for this row; `Some` only when the row has children.
     pub(super) group_key: Option<String>,
+    /// First letter of the machine this row runs on, shown when the row's parent lives on
+    /// another machine and the row is drawn outside its own machine's section.
+    pub(super) machine_mark: Option<char>,
 }
 
 /// Pane ids in rendered order. `collapsed_groups` is `None` for surfaces that render the
@@ -309,9 +312,9 @@ pub(super) fn render_agent_list<T>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_agent_row(
+pub(super) fn build_agent_row(
     pane_id: &str,
-    parent_pane_id: Option<&str>,
+    parent_workspace_id: Option<&str>,
     depth: usize,
     collapsed: bool,
     hidden_status_counts: super::agent_tree::StatusCounts,
@@ -381,15 +384,8 @@ fn build_agent_row(
         },
         state_text,
     );
-    let parent_workspace = parent_pane_id.and_then(|parent| {
-        snapshot
-            .agents
-            .iter()
-            .find(|candidate| candidate.pane_id == parent)
-            .map(|parent| parent.workspace_id.as_str())
-    });
     if let Some(label) =
-        agent_label.filter(|_| parent_workspace == Some(agent.workspace_id.as_str()))
+        agent_label.filter(|_| parent_workspace_id == Some(agent.workspace_id.as_str()))
     {
         name_nested_row_by_agent(&mut rows, label);
     }
@@ -405,6 +401,7 @@ fn build_agent_row(
         tree_lines_below,
         tree_line_status_below: Default::default(),
         group_key,
+        machine_mark: None,
     })
 }
 
@@ -507,11 +504,17 @@ pub(super) fn nested_agent_rows(
             .and_then(|level| ancestors.get(level))
             .copied();
         ancestors.push(&tree_row.pane_id);
-        let group_key = (tree_row.child_count > 0)
-            .then(|| super::agent_tree::agent_group_key(machine, &tree_row.pane_id));
+        let parent_workspace_id = parent.and_then(|parent| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == parent)
+                .map(|agent| agent.workspace_id.as_str())
+        });
+        let group_key = (tree_row.child_count > 0).then(|| tree_row.group_key.clone());
         if let Some(mut row) = build_agent_row(
             &tree_row.pane_id,
-            parent,
+            parent_workspace_id,
             tree_row.depth,
             tree_row.collapsed,
             tree_row.hidden_status_counts,
@@ -523,6 +526,18 @@ pub(super) fn nested_agent_rows(
             machine,
         ) {
             row.tree_line_status_below = line_statuses(index);
+            // A top-level row in the single-machine list whose token names a machine cannot
+            // nest here; keep the marker so it still reads as running on another machine.
+            if tree_row.depth == 0 {
+                row.machine_mark = snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == tree_row.pane_id)
+                    .and_then(super::agent_tree::parent_token)
+                    .and_then(super::aggregate_navigation::split_machine_parent)
+                    .and_then(|(label, _)| label)
+                    .and_then(|label| label.chars().next());
+            }
             rows.push(row);
         }
     }
@@ -841,7 +856,15 @@ fn tree_prefix(
             tree_line_style(row.tree_line_status_below[level - 1], palette),
         )
     };
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![match row.machine_mark {
+        Some(mark) => Span::styled(
+            mark.to_string(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::BOLD),
+        ),
+        None => Span::raw(" "),
+    }];
     for level in 1..depth {
         spans.push(if line(level) {
             rail(level, "  ")

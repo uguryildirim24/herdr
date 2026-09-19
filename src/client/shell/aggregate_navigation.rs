@@ -260,6 +260,154 @@ impl crate::agent_view_eval::AgentViewEntry for ClientAgentViewEntry<'_> {
     }
 }
 
+/// Visible aggregate rows plus the tree positions they were drawn from. The same pane id can
+/// exist on several machines, so callers map a tree row back through `trees[i].index` into the
+/// flat rows that produced it.
+pub(super) struct NestedAggregateRows<'a> {
+    pub(super) rows: Vec<AggregateAgentRow<'a>>,
+    pub(super) trees: Vec<super::agent_tree::AgentTreeRow>,
+}
+
+/// Split a `parent` token into an optional machine label and a pane id. A bare pane id has no
+/// label and means the reader's own machine; `<machine label>:<pane_id>` names a pane on
+/// another machine. The pane id keeps its own colon, so the split only accepts a suffix that is
+/// itself a pane id (a bare `w1:p1` is one token, not the label `w1` plus `p1`).
+pub(super) fn split_machine_parent(token: &str) -> Option<(Option<&str>, &str)> {
+    if let Some((label, pane_id)) = token.split_once(':') {
+        if !label.is_empty() && is_pane_id(pane_id) {
+            return Some((Some(label), pane_id));
+        }
+    }
+    is_pane_id(token).then_some((None, token))
+}
+
+/// Whether a string has one of the public pane id shapes (`<workspace>:p<number>`,
+/// `<workspace>-<number>`, `p_<number>`, `p_<workspace>_<number>`).
+fn is_pane_id(value: &str) -> bool {
+    if let Some((workspace, number)) = value.rsplit_once(":p") {
+        return !workspace.is_empty() && crate::workspace::decode_public_number(number).is_some();
+    }
+    if let Some((workspace, number)) = value.rsplit_once('-') {
+        return !workspace.is_empty() && number.parse::<usize>().is_ok();
+    }
+    if let Some(rest) = value.strip_prefix("p_") {
+        if let Some((workspace, raw)) = rest.rsplit_once('_') {
+            return !workspace.is_empty() && raw.parse::<u32>().is_ok();
+        }
+        return rest.parse::<u32>().is_ok();
+    }
+    false
+}
+
+/// Nest the flat aggregate rows across machines. Parent edges resolve by machine label first, so
+/// a lane on one endpoint can hang under its coordinator on another; the row keeps its own
+/// endpoint id. Sections stay in endpoint order, and each endpoint's roots keep the flat order.
+pub(super) fn nested_aggregate_rows<'a>(
+    flat: Vec<AggregateAgentRow<'a>>,
+    endpoints: &'a [ClientShellEndpoint],
+    collapsed_groups: &HashSet<String>,
+) -> NestedAggregateRows<'a> {
+    // `aggregate_agent_rows` can sort globally by priority; the panel draws each machine's rows
+    // together, so restore the endpoint sections before building the tree.
+    let mut buckets = (0..endpoints.len())
+        .map(|_| Vec::new())
+        .collect::<Vec<Vec<usize>>>();
+    for (index, row) in flat.iter().enumerate() {
+        buckets[row.endpoint.endpoint_index].push(index);
+    }
+    let order = buckets.into_iter().flatten().collect::<Vec<_>>();
+    let mut position_of = vec![0usize; flat.len()];
+    for (position, &flat_index) in order.iter().enumerate() {
+        position_of[flat_index] = position;
+    }
+
+    let by_key = flat
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            (
+                (row.endpoint.endpoint_index, row.agent.pane_id.as_str()),
+                index,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut parent_of = vec![None; order.len()];
+    for (position, &flat_index) in order.iter().enumerate() {
+        let row = &flat[flat_index];
+        let Some(token) = super::agent_tree::parent_token(row.agent) else {
+            continue;
+        };
+        let Some((label, pane_id)) = split_machine_parent(token) else {
+            continue;
+        };
+        let parent_endpoint_index = match label {
+            Some(label) => {
+                let Some(index) = endpoints
+                    .iter()
+                    .position(|endpoint| endpoint.label == label)
+                else {
+                    continue;
+                };
+                index
+            }
+            None => row.endpoint.endpoint_index,
+        };
+        let Some(&parent_flat_index) = by_key.get(&(parent_endpoint_index, pane_id)) else {
+            continue;
+        };
+        if parent_flat_index == flat_index {
+            continue;
+        }
+        // Workspaces are per machine, so the same-workspace rule only applies to a parent on
+        // the child's own endpoint.
+        if parent_endpoint_index == row.endpoint.endpoint_index
+            && flat[parent_flat_index].agent.workspace_id != row.agent.workspace_id
+        {
+            continue;
+        }
+        parent_of[position] = Some(position_of[parent_flat_index]);
+    }
+
+    let pane_ids = order
+        .iter()
+        .map(|&index| flat[index].agent.pane_id.clone())
+        .collect::<Vec<_>>();
+    let statuses = order
+        .iter()
+        .map(|&index| Some(flat[index].agent.agent_status))
+        .collect::<Vec<_>>();
+    let group_keys = order
+        .iter()
+        .map(|&index| {
+            super::agent_tree::agent_group_key(
+                Some(flat[index].endpoint.label),
+                &flat[index].agent.pane_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    let trees = super::agent_tree::build_tree_rows(
+        &pane_ids,
+        &statuses,
+        &group_keys,
+        &parent_of,
+        collapsed_groups,
+    );
+
+    let mut flat = flat.into_iter().map(Some).collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(trees.len());
+    for tree in trees.iter() {
+        let Some(row) = flat[order[tree.index]].take() else {
+            continue;
+        };
+        rows.push(row);
+    }
+    NestedAggregateRows {
+        rows,
+        trees: trees.into_iter().collect(),
+    }
+}
+
 pub(super) fn online_agent_targets(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
@@ -289,38 +437,7 @@ pub(super) fn visible_aggregate_agent_rows<'a>(
     if !config.agent_parent_nesting {
         return flat;
     }
-    let mut buckets = (0..endpoints.len())
-        .map(|_| Vec::new())
-        .collect::<Vec<Vec<AggregateAgentRow<'a>>>>();
-    for row in flat {
-        buckets[row.endpoint.endpoint_index].push(row);
-    }
-    let mut rows = Vec::new();
-    for (endpoint_index, bucket) in buckets.into_iter().enumerate() {
-        let endpoint = &endpoints[endpoint_index];
-        let Some(snapshot) = endpoint.snapshot.as_deref() else {
-            continue;
-        };
-        let ordered = bucket
-            .iter()
-            .map(|row| row.agent.pane_id.clone())
-            .collect::<Vec<_>>();
-        let mut by_pane_id = bucket
-            .into_iter()
-            .map(|row| (row.agent.pane_id.clone(), row))
-            .collect::<HashMap<_, _>>();
-        for tree_row in super::agent_tree::nest_agents(
-            &ordered,
-            snapshot,
-            collapsed_groups,
-            Some(&endpoint.label),
-        ) {
-            if let Some(row) = by_pane_id.remove(&tree_row.pane_id) {
-                rows.push(row);
-            }
-        }
-    }
-    rows
+    nested_aggregate_rows(flat, endpoints, collapsed_groups).rows
 }
 
 pub(super) fn navigator_rows(
@@ -484,4 +601,27 @@ pub(super) fn selected_navigator_target(
     navigator: &ClientNavigatorOverlay,
 ) -> Option<ClientNavigatorTarget> {
     navigator_selected_index(rows, navigator).map(|index| rows[index].target.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_token_split_separates_a_machine_label() {
+        assert_eq!(split_machine_parent("ws_1:p1"), Some((None, "ws_1:p1")));
+        assert_eq!(
+            split_machine_parent("oci:ws_1:p1"),
+            Some((Some("oci"), "ws_1:p1"))
+        );
+        assert_eq!(
+            split_machine_parent("oci:w1-2"),
+            Some((Some("oci"), "w1-2"))
+        );
+        assert_eq!(split_machine_parent("oci:p_5"), Some((Some("oci"), "p_5")));
+        // A value that is not a pane id has no machine; it resolves to nothing and stays top
+        // level in both panels.
+        assert_eq!(split_machine_parent("missing"), None);
+        assert_eq!(split_machine_parent("oci:not-a-pane"), None);
+    }
 }

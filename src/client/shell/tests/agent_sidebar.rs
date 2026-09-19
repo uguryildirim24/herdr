@@ -116,6 +116,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
+        machine_mark: None,
     };
     let child1 = AgentRow {
         pane_id: "child1".into(),
@@ -132,6 +133,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: None,
+        machine_mark: None,
     };
     let child2 = AgentRow {
         pane_id: "child2".into(),
@@ -148,6 +150,7 @@ fn open_parent_toggles_on_its_status_mark_and_indents_children() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: None,
+        machine_mark: None,
     };
 
     let p_toggle = render_agent_row(&mut buffer, Rect::new(0, 0, 30, 1), &parent_row, &config);
@@ -211,6 +214,7 @@ fn collapsed_parent_shows_a_dot_stack_of_hidden_statuses() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
+        machine_mark: None,
     };
 
     let toggles = render_agent_row(&mut buffer, area, &parent_row, &config);
@@ -275,6 +279,7 @@ fn collapsed_parent_dot_stack_is_capped_at_five() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: Some("agent:parent".into()),
+        machine_mark: None,
     };
 
     let toggles = render_agent_row(&mut buffer, area, &parent_row, &config);
@@ -303,6 +308,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: None,
+        machine_mark: None,
     };
     let depth_4_row = AgentRow {
         pane_id: "d4".into(),
@@ -319,6 +325,7 @@ fn depth_four_clamps_to_depth_three_indentation() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: None,
+        machine_mark: None,
     };
 
     assert!(
@@ -595,6 +602,27 @@ fn nested_agent_rows_scope_collapse_keys_to_the_machine() {
 }
 
 #[test]
+fn single_machine_list_marks_a_foreign_parent_and_keeps_it_top_level() {
+    let mut snapshot = snapshot();
+    snapshot.agents = vec![
+        tree_agent("p2", AgentStatus::Idle, 1, Some("oci:ws_1:p1")),
+        tree_agent("p3", AgentStatus::Idle, 2, Some("missing")),
+    ];
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let ordered = vec!["p2".to_string(), "p3".to_string()];
+
+    let rows = nested_agent_rows(&snapshot, &ordered, &config, Some(&HashSet::new()), None);
+    assert_eq!(rows.len(), 2);
+    // A token that names another machine cannot nest here; it keeps that machine's letter.
+    assert_eq!(rows[0].depth, 0);
+    assert_eq!(rows[0].machine_mark, Some('o'));
+    // A bare token that resolves to nothing stays top level with no mark.
+    assert_eq!(rows[1].depth, 0);
+    assert_eq!(rows[1].machine_mark, None);
+}
+
+#[test]
 fn nested_continuation_rows_keep_the_two_column_text_offset() {
     let config = ClientShellConfig::from_config(&Config::default());
     let area = Rect::new(0, 0, 30, 4);
@@ -621,6 +649,7 @@ fn nested_continuation_rows_keep_the_two_column_text_offset() {
         tree_lines_below: 0,
         tree_line_status_below: Default::default(),
         group_key: None,
+        machine_mark: None,
     };
 
     render_agent_row(

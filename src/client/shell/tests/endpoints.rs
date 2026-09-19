@@ -381,6 +381,131 @@ fn aggregate_agent_navigation_skips_collapsed_lanes() {
     assert!(hidden.actions.is_empty());
 }
 
+/// Two machines: a local coordinator `ws_1:p1` with a local lane `ws_1:p3`, and a lane
+/// `ws_1:p2` on `oci` whose `parent` token names the local coordinator (`Local:ws_1:p1`).
+fn cross_machine_parent_state() -> (ClientShellState, ClientEndpointId) {
+    fn with_cross_lane(boot_id: &str, oci: bool) -> ClientShellSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.boot_id = boot_id.into();
+        snapshot.agents = if oci {
+            vec![nested_agent("ws_1:p2", Some("Local:ws_1:p1"))]
+        } else {
+            vec![
+                nested_agent("ws_1:p3", Some("ws_1:p1")),
+                nested_agent("ws_1:p1", None),
+            ]
+        };
+        snapshot
+    }
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut profile = remote_profile();
+    profile.label = "oci".into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(with_cross_lane("boot-1", false)));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(with_cross_lane("boot-oci", true)));
+    (state, endpoint_id)
+}
+
+#[test]
+fn aggregate_nests_a_lane_under_its_coordinator_on_another_machine() {
+    let (mut state, remote) = cross_machine_parent_state();
+    state.compose(100, 28).unwrap();
+
+    // The box lane hangs under the local coordinator, in the local section, right after the
+    // coordinator's own local lane. Its row still names the oci endpoint.
+    assert_eq!(
+        visible_agents(&state),
+        vec![
+            (ClientEndpointId::Local, "ws_1:p1".into()),
+            (ClientEndpointId::Local, "ws_1:p3".into()),
+            (remote.clone(), "ws_1:p2".into()),
+        ]
+    );
+
+    let box_row = endpoint_row(&state, &remote, "ws_1:p2");
+    let local_row = endpoint_row(&state, &ClientEndpointId::Local, "ws_1:p3");
+    let frame = state.compose(100, 28).unwrap();
+    let buffer = frame.to_ratatui_buffer().unwrap();
+    // The box lane carries its own machine's letter; the same-machine lane stays unmarked.
+    assert_eq!(buffer[(box_row.x, box_row.y)].symbol(), "o");
+    assert_eq!(buffer[(local_row.x, local_row.y)].symbol(), " ");
+}
+
+#[test]
+fn aggregate_navigation_follows_a_cross_machine_child() {
+    let (mut state, remote) = cross_machine_parent_state();
+    state.compose(100, 28).unwrap();
+    let mut outcome = ClientShellInput::default();
+    assert!(
+        state.handle_endpoint_navigation(crate::input::KeybindAction::FocusAgent(2), &mut outcome,)
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "ws_1:p2"
+    ));
+}
+
+#[test]
+fn aggregate_fold_hides_a_cross_machine_child_and_stacks_it() {
+    let (mut state, remote) = cross_machine_parent_state();
+    state.collapsed_groups.insert("agent:Local:ws_1:p1".into());
+    state.compose(100, 28).unwrap();
+    let visible = visible_agents(&state);
+    assert_eq!(visible, vec![(ClientEndpointId::Local, "ws_1:p1".into())]);
+    assert!(!visible.contains(&(remote, "ws_1:p2".into())));
+
+    let (stack_rect, pane_id, _) = state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(rect, _, key)| key == "agent:Local:ws_1:p1" && rect.x > 1)
+        .cloned()
+        .expect("collapsed cross-machine parent dot stack");
+    assert_eq!(pane_id, "ws_1:p1");
+    // One hidden local lane and one hidden box lane.
+    assert_eq!(stack_rect.width, 2);
+}
+
+#[test]
+fn aggregate_click_on_a_cross_machine_lane_focuses_its_machine() {
+    let (mut state, remote) = cross_machine_parent_state();
+    state.compose(100, 28).unwrap();
+    let box_row = endpoint_row(&state, &remote, "ws_1:p2");
+    let mut outcome = ClientShellInput::default();
+    assert!(state.handle_endpoint_agent_click((box_row.x, box_row.y), &mut outcome));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "ws_1:p2"
+    ));
+}
+
+#[test]
+fn aggregate_drag_from_a_cross_machine_lane_onto_its_parents_machine_is_not_a_target() {
+    let (mut state, remote) = cross_machine_parent_state();
+    activate_test_endpoint(&mut state, &remote, "boot-oci");
+    state.compose(100, 28).unwrap();
+    let source = endpoint_row(&state, &remote, "ws_1:p2");
+    let target = endpoint_row(&state, &ClientEndpointId::Local, "ws_1:p1");
+    let outcome = drag_row(&mut state, source, target);
+    assert!(
+        outcome.actions.is_empty(),
+        "cross-machine drop must do nothing"
+    );
+    assert!(reported_parent_for(&outcome, &remote, "ws_1:p2").is_none());
+}
+
 /// Two machines, each with one coordinator and one lane under it, and the remote labelled
 /// `label`. The pane ids match across machines, so a correct fold must be machine-qualified.
 fn aggregate_single_lane_state(label: &str) -> (ClientShellState, ClientEndpointId) {
