@@ -511,13 +511,15 @@ impl ClientShellState {
     /// Where dropping agent `source` at `point` would put it. An agent row in the same
     /// workspace becomes its parent, unless that row is already its parent or descends from
     /// it (which would make a cycle); the empty part of the Agents panel un-nests it when it
-    /// has a parent. Everywhere else is not a drop target.
+    /// has a parent. Everywhere else is not a drop target. Only rows of the source's own
+    /// endpoint can take the drop; the aggregate panel has the same pane id on several machines.
     pub(super) fn agent_drop_target_at(
         &self,
+        endpoint_id: &ClientEndpointId,
         source: &str,
         point: (u16, u16),
     ) -> Option<AgentDropTarget> {
-        let snapshot = self.snapshot.as_deref()?;
+        let snapshot = self.endpoint_snapshot(endpoint_id)?;
         let agent = |pane_id: &str| {
             snapshot
                 .agents
@@ -534,13 +536,29 @@ impl ClientShellState {
             })
         };
         let source_agent = agent(source)?;
-        if let Some((_, target)) = self
+        let target = self
             .hits
-            .agents
+            .endpoint_agents
             .iter()
-            .find(|(rect, _)| super::contains(*rect, point))
-        {
-            if agent(target)?.workspace_id != source_agent.workspace_id
+            .find(|(rect, hit_endpoint, _)| {
+                hit_endpoint == endpoint_id && super::contains(*rect, point)
+            })
+            .map(|(_, _, pane_id)| pane_id.clone())
+            .or_else(|| {
+                // The single-machine panel records its rows in `hits.agents` for the active
+                // endpoint.
+                (endpoint_id == &self.active_endpoint_id)
+                    .then(|| {
+                        self.hits
+                            .agents
+                            .iter()
+                            .find(|(rect, _)| super::contains(*rect, point))
+                            .map(|(_, pane_id)| pane_id.clone())
+                    })
+                    .flatten()
+            });
+        if let Some(target) = target {
+            if agent(&target)?.workspace_id != source_agent.workspace_id
                 || parent_of(source) == Some(target.as_str())
             {
                 return None;
@@ -553,28 +571,41 @@ impl ClientShellState {
                 }
                 ancestor = parent_of(pane_id);
             }
-            return Some(AgentDropTarget::Parent(target.clone()));
+            return Some(AgentDropTarget::Parent(target));
         }
-        (super::contains(self.hits.agent_body, point) && parent_of(source).is_some())
-            .then_some(AgentDropTarget::Unnest)
+        (super::contains(self.hits.agent_body, point)
+            && parent_of(source).is_some()
+            // Empty panel space, not another machine's row: a row on another machine is never
+            // a target, not even an un-nest.
+            && !self
+                .hits
+                .endpoint_agents
+                .iter()
+                .any(|(rect, _, _)| super::contains(*rect, point))
+            && !self
+                .hits
+                .agents
+                .iter()
+                .any(|(rect, _)| super::contains(*rect, point)))
+        .then_some(AgentDropTarget::Unnest)
     }
 
     /// Sets or clears the dropped agent's `parent` token the way `herdr agent set-parent` does,
     /// and opens a collapsed new parent so the moved row stays in sight.
     fn drop_agent(
         &mut self,
+        endpoint_id: ClientEndpointId,
         pane_id: String,
         target: AgentDropTarget,
         outcome: &mut ClientShellInput,
     ) {
         let parent = match target {
             AgentDropTarget::Parent(parent) => {
-                // The single-machine panel renders unqualified keys; the aggregate panel
-                // qualifies them per machine. Open the new parent with whichever key the panel
-                // that accepted the drop renders.
+                // Open the new parent with the key the panel that accepted the drop renders:
+                // unqualified with one machine, machine-qualified in the aggregate.
                 let machine = self
                     .multi_endpoint_active()
-                    .then(|| self.active_endpoint_label().to_owned());
+                    .then(|| self.endpoint_label(&endpoint_id).to_owned());
                 let key = super::agent_tree::agent_group_key(machine.as_deref(), &parent);
                 if self.collapsed_groups.remove(&key) {
                     self.persist_chrome_preferences(outcome);
@@ -583,7 +614,8 @@ impl ClientShellState {
             }
             AgentDropTarget::Unnest => None,
         };
-        self.push_endpoint_method(
+        self.push_endpoint_method_to(
+            &endpoint_id,
             crate::api::schema::Method::PaneReportMetadata(
                 crate::api::schema::PaneReportMetadataParams {
                     pane_id,
@@ -601,6 +633,7 @@ impl ClientShellState {
                     ttl_ms: None,
                 },
             ),
+            PendingEndpointKind::Generic,
             outcome,
         );
     }
@@ -1255,8 +1288,12 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
-                Some(ClientChromeDrag::Agent { pane_id, .. }) => {
-                    let target = self.agent_drop_target_at(pane_id, point);
+                Some(ClientChromeDrag::Agent {
+                    endpoint_id,
+                    pane_id,
+                    ..
+                }) => {
+                    let target = self.agent_drop_target_at(endpoint_id, pane_id, point);
                     if let Some(ClientChromeDrag::Agent {
                         target: current, ..
                     }) = self.chrome_drag.as_mut()
@@ -1305,9 +1342,14 @@ impl ClientShellState {
                     .abs_diff(press.start_column)
                     .max(mouse.row.abs_diff(press.start_row));
                 if delta >= 1 {
+                    let endpoint_id = press.endpoint_id.clone();
                     let pane_id = press.pane_id.clone();
-                    let target = self.agent_drop_target_at(&pane_id, point);
-                    self.chrome_drag = Some(ClientChromeDrag::Agent { pane_id, target });
+                    let target = self.agent_drop_target_at(&endpoint_id, &pane_id, point);
+                    self.chrome_drag = Some(ClientChromeDrag::Agent {
+                        endpoint_id,
+                        pane_id,
+                        target,
+                    });
                     outcome.repaint = true;
                 }
                 return;
@@ -1369,12 +1411,18 @@ impl ClientShellState {
                         }
                         outcome.repaint = true;
                     }
-                    ClientChromeDrag::Agent { pane_id, target } => {
+                    ClientChromeDrag::Agent {
+                        endpoint_id,
+                        pane_id,
+                        target,
+                    } => {
                         // Re-check on release: the snapshot may have changed since the last move.
                         if let Some(target) = target.filter(|target| {
-                            self.agent_drop_target_at(&pane_id, point).as_ref() == Some(target)
+                            self.agent_drop_target_at(&endpoint_id, &pane_id, point)
+                                .as_ref()
+                                == Some(target)
                         }) {
-                            self.drop_agent(pane_id, target, outcome);
+                            self.drop_agent(endpoint_id, pane_id, target, outcome);
                         }
                         outcome.repaint = true;
                     }
@@ -1458,10 +1506,9 @@ impl ClientShellState {
                 return;
             }
             if let Some(press) = self.agent_press.take() {
-                self.push_endpoint_method(
-                    crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                        pane_id: press.pane_id,
-                    }),
+                self.focus_or_activate(
+                    press.endpoint_id,
+                    ClientEndpointFocusTarget::Pane(press.pane_id),
                     outcome,
                 );
                 return;
@@ -2275,6 +2322,26 @@ impl ClientShellState {
                     self.tab_press = Some(tab_press);
                     return;
                 }
+                // The aggregate panel records agent rows in `hits.endpoint_agents` (the
+                // single-machine panel uses `hits.agents` below). With nesting on, focus waits
+                // for release so the row can be dragged onto a parent of its own machine.
+                let endpoint_agent = self
+                    .hits
+                    .endpoint_agents
+                    .iter()
+                    .find(|(rect, _, _)| super::contains(*rect, point))
+                    .map(|(_, endpoint_id, pane_id)| (endpoint_id.clone(), pane_id.clone()));
+                if let Some((endpoint_id, pane_id)) = endpoint_agent
+                    .filter(|_| self.config.agent_parent_nesting && self.config.mouse_capture)
+                {
+                    self.agent_press = Some(ClientAgentPress {
+                        endpoint_id,
+                        pane_id,
+                        start_column: mouse.column,
+                        start_row: mouse.row,
+                    });
+                    return;
+                }
                 if self.handle_endpoint_agent_click(point, outcome) {
                     return;
                 }
@@ -2291,6 +2358,7 @@ impl ClientShellState {
                     .filter(|_| self.config.agent_parent_nesting && self.config.mouse_capture)
                 {
                     self.agent_press = Some(ClientAgentPress {
+                        endpoint_id: self.active_endpoint_id.clone(),
                         pane_id: pane_id.clone(),
                         start_column: mouse.column,
                         start_row: mouse.row,

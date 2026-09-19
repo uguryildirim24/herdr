@@ -184,6 +184,7 @@ pub(super) struct ClientWorkspacePress {
 }
 
 pub(super) struct ClientAgentPress {
+    pub(super) endpoint_id: ClientEndpointId,
     pub(super) pane_id: String,
     pub(super) start_column: u16,
     pub(super) start_row: u16,
@@ -233,6 +234,7 @@ pub(super) enum ClientChromeDrag {
     },
     /// An agent row dragged in the Agents panel; dropping it sets or clears its `parent` token.
     Agent {
+        endpoint_id: ClientEndpointId,
         pane_id: String,
         target: Option<AgentDropTarget>,
     },

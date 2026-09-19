@@ -179,12 +179,15 @@ impl ClientShellState {
             _ => (None, None),
         };
         let agent_drag = match &self.chrome_drag {
-            Some(ClientChromeDrag::Agent { pane_id, target }) => {
-                Some(super::agent_sidebar::AgentDragView {
-                    pane_id,
-                    target: target.as_ref(),
-                })
-            }
+            Some(ClientChromeDrag::Agent {
+                endpoint_id,
+                pane_id,
+                target,
+            }) => Some(super::agent_sidebar::AgentDragView {
+                endpoint_id,
+                pane_id,
+                target: target.as_ref(),
+            }),
             _ => None,
         };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));

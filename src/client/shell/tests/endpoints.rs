@@ -436,6 +436,129 @@ fn visible_agents(state: &ClientShellState) -> Vec<(ClientEndpointId, String)> {
         .collect()
 }
 
+fn mouse_event(kind: MouseEventKind, (column, row): (u16, u16)) -> RawInputEvent {
+    RawInputEvent::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    })
+}
+
+fn endpoint_row(state: &ClientShellState, endpoint_id: &ClientEndpointId, pane_id: &str) -> Rect {
+    state
+        .hits
+        .endpoint_agents
+        .iter()
+        .find(|(_, endpoint, pane)| endpoint == endpoint_id && pane == pane_id)
+        .map(|(rect, _, _)| *rect)
+        .expect("endpoint agent row")
+}
+
+/// Down, Drag and Up on one row: the aggregate panel's nest gesture.
+fn drag_row(state: &mut ClientShellState, from: Rect, to: Rect) -> ClientShellInput {
+    let at = |rect: Rect| (rect.x + 3, rect.y);
+    state.handle_raw_events(vec![
+        mouse_event(MouseEventKind::Down(MouseButton::Left), at(from)),
+        mouse_event(MouseEventKind::Drag(MouseButton::Left), at(to)),
+        mouse_event(MouseEventKind::Up(MouseButton::Left), at(to)),
+    ])
+}
+
+/// The `parent` token a drop reported, for one endpoint and pane.
+fn reported_parent_for(
+    outcome: &ClientShellInput,
+    endpoint_id: &ClientEndpointId,
+    pane_id: &str,
+) -> Option<Option<String>> {
+    outcome.actions.iter().find_map(|action| match action {
+        ClientShellAction::Endpoint {
+            endpoint_id: action_endpoint,
+            request,
+            ..
+        } if action_endpoint == endpoint_id => match &request.method {
+            crate::api::schema::Method::PaneReportMetadata(params) if params.pane_id == pane_id => {
+                params.tokens.get("parent").cloned()
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// A collapsed parent's dot-stack toggle: the fold target that is not the leftmost status mark.
+fn stack_toggle(state: &ClientShellState, key: &str) -> (Rect, String, String) {
+    state
+        .hits
+        .agent_group_toggles
+        .iter()
+        .find(|(rect, _, toggle_key)| toggle_key == key && rect.x > 1)
+        .cloned()
+        .expect("collapsed parent dot-stack toggle")
+}
+
+/// Two machines, each with coordinator `ws_1:p1` and the given lanes under it, so a folded
+/// parent's stack width is that machine's own hidden-lane count.
+fn aggregate_stack_state(label: &str) -> (ClientShellState, ClientEndpointId) {
+    fn with_lanes(boot_id: &str, lanes: &[&str]) -> ClientShellSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.boot_id = boot_id.into();
+        let mut agents = vec![nested_agent("ws_1:p1", None)];
+        for lane in lanes {
+            agents.push(nested_agent(lane, Some("ws_1:p1")));
+        }
+        snapshot.agents = agents;
+        snapshot
+    }
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut profile = remote_profile();
+    profile.label = label.into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(with_lanes("boot-1", &["ws_1:p2", "ws_1:p3"])));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(
+        &endpoint_id,
+        Box::new(with_lanes(
+            "boot-remote",
+            &["ws_1:p2", "ws_1:p3", "ws_1:p4"],
+        )),
+    );
+    (state, endpoint_id)
+}
+
+/// Two machines, each with coordinator `ws_1:p1`, a nested lane `ws_1:p2`, and a standalone
+/// lane `ws_1:p3` that can be dragged onto the coordinator.
+fn aggregate_drag_state(label: &str) -> (ClientShellState, ClientEndpointId) {
+    fn with_standalone(boot_id: &str) -> ClientShellSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.boot_id = boot_id.into();
+        snapshot.agents = vec![
+            nested_agent("ws_1:p3", None),
+            nested_agent("ws_1:p2", Some("ws_1:p1")),
+            nested_agent("ws_1:p1", None),
+        ];
+        snapshot
+    }
+
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut profile = remote_profile();
+    profile.label = label.into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(with_standalone("boot-1")));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(with_standalone("boot-remote")));
+    (state, endpoint_id)
+}
+
 #[test]
 fn aggregate_local_agent_toggle_click_collapses_local_group_only() {
     let (mut state, remote) = aggregate_single_lane_state("oci");
@@ -754,6 +877,149 @@ fn aggregate_live_shaped_fold_works() {
     assert!(visible
         .iter()
         .any(|(endpoint, pane)| !endpoint.is_local() && pane == "w1G:p1V"));
+}
+
+#[test]
+fn aggregate_drag_lane_onto_its_own_coordinator_targets_that_machine() {
+    let (mut state, remote) = aggregate_drag_state("oci");
+    state.compose(100, 28).unwrap();
+    let source = endpoint_row(&state, &remote, "ws_1:p3");
+    let target = endpoint_row(&state, &remote, "ws_1:p1");
+    let outcome = drag_row(&mut state, source, target);
+    assert_eq!(
+        reported_parent_for(&outcome, &remote, "ws_1:p3"),
+        Some(Some("ws_1:p1".to_string()))
+    );
+    assert!(
+        outcome.actions.iter().all(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { endpoint_id, .. } if endpoint_id == &remote
+        )),
+        "the method goes to the dragged row's machine, not the active one"
+    );
+    assert!(!state.collapsed_groups.contains("agent:oci:ws_1:p1"));
+}
+
+#[test]
+fn aggregate_drag_across_machines_is_never_a_target() {
+    let (mut state, remote) = aggregate_drag_state("oci");
+    state.compose(100, 28).unwrap();
+    let source = endpoint_row(&state, &remote, "ws_1:p3");
+    let target = endpoint_row(&state, &ClientEndpointId::Local, "ws_1:p1");
+    let outcome = drag_row(&mut state, source, target);
+    assert!(
+        outcome.actions.is_empty(),
+        "cross-machine drop must do nothing"
+    );
+    assert!(reported_parent_for(&outcome, &remote, "ws_1:p3").is_none());
+}
+
+#[test]
+fn aggregate_press_without_movement_focuses_the_lane() {
+    let (mut state, remote) = aggregate_drag_state("oci");
+    state.compose(100, 28).unwrap();
+    let lane = endpoint_row(&state, &remote, "ws_1:p3");
+    let at = (lane.x + 3, lane.y);
+    let outcome = state.handle_raw_events(vec![
+        mouse_event(MouseEventKind::Down(MouseButton::Left), at),
+        mouse_event(MouseEventKind::Up(MouseButton::Left), at),
+    ]);
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "ws_1:p3"
+    ));
+}
+
+#[test]
+fn aggregate_drag_marks_the_target_row_like_the_single_panel() {
+    let (mut state, remote) = aggregate_drag_state("oci");
+    state.compose(100, 28).unwrap();
+    let source = endpoint_row(&state, &remote, "ws_1:p3");
+    let target = endpoint_row(&state, &remote, "ws_1:p1");
+    let at = |rect: Rect| (rect.x + 3, rect.y);
+    state.handle_raw_events(vec![
+        mouse_event(MouseEventKind::Down(MouseButton::Left), at(source)),
+        mouse_event(MouseEventKind::Drag(MouseButton::Left), at(target)),
+    ]);
+    assert!(matches!(
+        state.chrome_drag,
+        Some(ClientChromeDrag::Agent {
+            target: Some(AgentDropTarget::Parent(ref pane)),
+            ..
+        }) if pane == "ws_1:p1"
+    ));
+    let frame = state.compose(100, 28).unwrap();
+    let buffer = frame.to_ratatui_buffer().unwrap();
+    assert_eq!(buffer[(target.x, target.y)].symbol(), "▌");
+}
+
+#[test]
+fn aggregate_drop_onto_a_collapsed_remote_parent_opens_it() {
+    let mut remote = snapshot();
+    remote.boot_id = "boot-remote".into();
+    remote.agents = vec![
+        nested_agent("ws_1:p3", Some("ws_1:p2")),
+        nested_agent("ws_1:p4", Some("ws_1:p1")),
+        nested_agent("ws_1:p2", None),
+        nested_agent("ws_1:p1", None),
+    ];
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut profile = remote_profile();
+    profile.label = "oci".into();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+    state.collapsed_groups.insert("agent:oci:ws_1:p1".into());
+    state.compose(100, 28).unwrap();
+
+    let source = endpoint_row(&state, &endpoint_id, "ws_1:p3");
+    let target = endpoint_row(&state, &endpoint_id, "ws_1:p1");
+    let outcome = drag_row(&mut state, source, target);
+    assert_eq!(
+        reported_parent_for(&outcome, &endpoint_id, "ws_1:p3"),
+        Some(Some("ws_1:p1".to_string()))
+    );
+    assert!(!state.collapsed_groups.contains("agent:oci:ws_1:p1"));
+}
+
+#[test]
+fn aggregate_folded_parent_draws_and_opens_its_own_stack() {
+    let (mut state, remote) = aggregate_stack_state("oci");
+    state.collapsed_groups.insert("agent:Local:ws_1:p1".into());
+    state.collapsed_groups.insert("agent:oci:ws_1:p1".into());
+    let frame = state.compose(100, 40).unwrap();
+    let buffer = frame.to_ratatui_buffer().unwrap();
+
+    // Each machine's stack counts only its own hidden lanes.
+    let (local_stack, _, _) = stack_toggle(&state, "agent:Local:ws_1:p1");
+    let (remote_stack, _, _) = stack_toggle(&state, "agent:oci:ws_1:p1");
+    assert_eq!(local_stack.width, 2);
+    assert_eq!(remote_stack.width, 3);
+    // Both stacks draw the single panel's status dots.
+    let dot = status_icon(AgentStatus::Idle, state.config.status_indicators);
+    for rect in [local_stack, remote_stack] {
+        for offset in 0..rect.width {
+            assert_eq!(buffer[(rect.x + offset, rect.y)].symbol(), dot);
+        }
+    }
+
+    // Clicking one machine's stack opens that machine only.
+    let click = toggle_click(&mut state, local_stack);
+    assert!(click.actions.is_empty());
+    assert!(!state.collapsed_groups.contains("agent:Local:ws_1:p1"));
+    assert!(state.collapsed_groups.contains("agent:oci:ws_1:p1"));
+    state.compose(100, 40).unwrap();
+    let visible = visible_agents(&state);
+    assert!(visible.contains(&(ClientEndpointId::Local, "ws_1:p2".into())));
+    assert!(!visible.contains(&(remote, "ws_1:p2".into())));
 }
 
 #[test]

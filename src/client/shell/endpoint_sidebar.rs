@@ -587,6 +587,7 @@ pub(super) fn render_expanded(
         state.collapsed_groups,
         config,
         state.agent_scroll,
+        state.agent_drag,
         hits,
     );
     hits.sidebar_toggle = Rect::new(

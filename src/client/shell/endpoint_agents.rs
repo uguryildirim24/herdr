@@ -65,6 +65,7 @@ pub(super) fn render_expanded(
     collapsed_groups: &HashSet<String>,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
+    drag: Option<super::agent_sidebar::AgentDragView<'_>>,
     hits: &mut ShellHitMap,
 ) {
     if !super::agent_sidebar::render_agent_panel_header(
@@ -92,6 +93,13 @@ pub(super) fn render_expanded(
             let toggles =
                 super::agent_sidebar::render_padded_agent_row(buffer, rect, &row.agent, config);
             hits.agent_group_toggles.extend(toggles);
+            // The drag marks come from the single-machine panel's renderer; the endpoint scope
+            // keeps the same pane id on another machine from being dimmed or accent-marked.
+            if let Some(drag) = drag.filter(|drag| drag.endpoint_id == &row.endpoint_id) {
+                super::agent_sidebar::render_agent_drag_marks(
+                    buffer, rect, &row.agent, drag, config,
+                );
+            }
             if row.stale {
                 buffer.set_style(
                     rect,

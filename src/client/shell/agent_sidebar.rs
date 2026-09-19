@@ -81,9 +81,11 @@ pub(super) fn ordered_agent_pane_ids(
         .collect()
 }
 
-/// An agent row being dragged onto a new parent, for drawing the drag.
+/// An agent row being dragged onto a new parent, for drawing the drag. The endpoint scopes the
+/// drag to one machine's rows; the aggregate panel has the same pane id on several machines.
 #[derive(Clone, Copy)]
 pub(super) struct AgentDragView<'a> {
+    pub(super) endpoint_id: &'a ClientEndpointId,
     pub(super) pane_id: &'a str,
     pub(super) target: Option<&'a AgentDropTarget>,
 }
@@ -528,8 +530,8 @@ pub(super) fn nested_agent_rows(
 }
 
 /// Dims the dragged row and marks the parent it would nest under with an accent bar in the
-/// free first column.
-fn render_agent_drag_marks(
+/// free first column. Callers scope this to the dragged endpoint's rows.
+pub(super) fn render_agent_drag_marks(
     buffer: &mut Buffer,
     rect: Rect,
     row: &AgentRow,
