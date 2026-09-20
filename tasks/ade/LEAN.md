@@ -145,16 +145,39 @@ know is wrong.
 This was most of his frustration tonight, and none of it was broken code — it
 was correct code that was not running anywhere he could see:
 
-- the four talk shells were nine hours and ~25 installs old;
-- his client window was running the pre-r27 binary;
-- the box's `herdr` predated r27 by two and a half hours;
-- the running server still runs its 13:07 image.
+Everything that can be older than the program, found by hitting each one:
+
+1. **A talk shell** (`ha talk <slug>`), one per project — stale after every
+   plugin install. Four of them were nine hours and ~25 installs old.
+2. **His client window** (the `herdr` process) — stale after every fork install.
+   It was running the pre-r27 binary while the fix sat on disk.
+3. **The Mac's herdr server** — stale after every fork install; only a live
+   handoff moves it, and that is Rolf's call. Still on its 13:07 image.
+4. **The box's herdr server** — the same, on the box.
+5. **A coordinator's loaded skill text** — a merge that changes
+   `skill/COORDINATOR.md` does not reach a coordinator that is already running.
+   r25 changed it tonight; this session still holds the copy it read at start.
+6. **A running lane's brief and skill** — the same problem, per lane.
+7. **pi's provider config** — `herdr-pro serve` picks a fresh port on every
+   start, so `herdr-pi setup` must run again or pi points at a dead port.
+
+The harness knows every one of those versions.
 
 He hit all four and had to ask why a finished fix was not there. The harness
 knows every one of those versions.
 
 **Should be:** the screen says *this window is older than the program* and names
 what to restart. Nobody should discover staleness by being confused.
+
+### U5. The task list is not on the screen
+`TASKS.md` is the list of what Rolf wants done. Today it exists only inside the
+coordinator's digest, so the one place he looks does not show it. Rolf,
+2026-09-20: "I want to see the task md on the talk page."
+
+**Should be:** the screen shows the open tasks, grouped by list, each with its
+owner and — for a delegated one — the state of the thread doing it. Adding,
+finishing and cancelling stay his words in the chat; the screen is where he sees
+what is on the list without asking.
 
 ---
 
