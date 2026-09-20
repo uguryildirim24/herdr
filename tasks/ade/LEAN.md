@@ -355,3 +355,30 @@ Either the reviewer task carries the same exception, or `round advance` publishe
 the reviewer's branch when it starts it on a box. The second is better: the
 coordinator already pushes lane branches at start, and it keeps the "a lane never
 pushes" rule whole.
+
+### E6, E7, D10, D11 — found by reading the ledger A3 built
+One night of use, then `ha ledger list`:
+
+- **E6.** `harness_install_stale_self` sat at the top with nine hits. That is
+  D5's fix working exactly as designed — a refusal with a next command in its
+  message — recorded as the harness's own defect. `decision_authority` the same.
+  Fixed with a `DesignedRefusal` type that survives `anyhow` context, so the
+  classification is structural rather than a list of message patterns.
+- **D10.** Five lanes hit `report_path_invalid` on `ha done`. They had all passed
+  the exact absolute path the harness printed under `# Paths` in their own brief.
+  The harness was refusing its own instruction.
+- **E7.** After E6, nine `git rev-parse` rows appeared, one per box lane
+  resolved: a probe asking whether a branch exists locally, correctly answered
+  "no". The lane audited all 68 subprocess sites and found **none** can safely
+  treat every non-zero exit as information, so instead of exempting anything it
+  changed five call sites to ask in a way that succeeds — `for-each-ref`,
+  `ls-tree` — and return `Option`. Its own rule: *optional does not mean
+  infallible.*
+- **D11.** `ha doctor` silently stopped checking the cloud box. It reads machines
+  from `PROJECT.md` repo rows and unresolved remote threads; the box was only
+  ever covered while a box lane happened to be running, and before M1 it was
+  named by `[roles.lane] machine`. Four real box failures went unreported.
+
+The ledger paid for itself in one night, and every one of these is the same
+shape: the harness could not tell its own correct behaviour from a fault, or
+could not see what it was not currently using.
