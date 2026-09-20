@@ -338,3 +338,20 @@ radius is the weakest question has its first live support here: on the r47 revie
 it returned confidence **0.00**, meaning the probability mass was spread flat
 across all four levels. Do not tune on three rows; run the 90-case corpus through
 Jev once, save the raw answers, and sweep offline.
+
+### D9. A box reviewer cannot seal its own verdict
+2026-09-20 04:40Z, round r48. The reviewer t-0104 finished, wrote its MERGE
+verdict at `1aba858`, and then could not `ha done`: `published_ref_mismatch`,
+because `ops::check_published_ref` requires the lane ref on the remote and the
+reviewer's own task text forbids pushing. It said so plainly and waited instead
+of guessing, which is right — but it had no move.
+
+D2 put the box exception in `skill/LANE.md`: a cloud-box lane publishes its own
+lane branch before `done`. The reviewer task built by `start_reviewer` does not
+carry that exception, so a box reviewer inherits the Mac rule and stops. The
+coordinator has to push the branch by hand and prompt it to retry.
+
+Either the reviewer task carries the same exception, or `round advance` publishes
+the reviewer's branch when it starts it on a box. The second is better: the
+coordinator already pushes lane branches at start, and it keeps the "a lane never
+pushes" rule whole.
