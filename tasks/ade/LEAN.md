@@ -275,3 +275,28 @@ harness raises by itself rather than work someone has to remember. Then A2 and
 A1, which are what make a fumbling or freshly-compacted coordinator harmless.
 Then E1 and E2, which are only safe to thin once the binary refuses. U4 and U1
 are cheap and are what Rolf feels every day. M is its own design turn.
+
+### D6. The file sync copied the Mac's build output to the box
+2026-09-20 03:00Z. After r40 merged, `ha harness install` rebuilt the fork on the
+Mac; Mutagen then copied `vendor/libghostty-vt/zig-out/lib/libghostty-vt.a` — a
+Mach-O archive with Rolf's Mac uid in it — over the box's Linux one. The box link
+step failed with dozens of undefined `ghostty_*` symbols. The box build had been
+riding on the synced Mac artifact all along; with `zig-out` and `.zig-cache`
+cleared it failed with `cannot find -lghostty-vt`, because cargo had cached the
+build-script output from a run where the synced file happened to be there.
+
+**Fixed:** the `herdr` sync session was recreated with `zig-out` and
+`.zig-cache` added to its ignores, the box's copies of both were removed, and the
+box's cached `target/release/build/herdr-*` was cleared so `build.rs` ran its own
+`zig build`. The box now produces its own Linux library.
+
+**Worth knowing:** a two-way sync of a source tree will carry build output unless
+every build directory is named in the ignores. `target` and `.target` were there;
+`zig-out` and `.zig-cache` were not.
+
+### A5. A real decision cannot be recorded as one
+`ha decide --class what-you-get` refuses without `--basis request:<id>` or
+`ask:<id>@<revision>`, and nothing in the harness writes a request record. So
+every choice made for Rolf this project — twenty-three of them — is logged
+`routine`, including ones that changed what he gets. The refusal is right; the
+thing it points at does not exist.
