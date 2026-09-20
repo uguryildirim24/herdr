@@ -259,35 +259,15 @@ pub(super) fn render_expanded(
             .fg(palette.overlay0)
             .add_modifier(Modifier::BOLD),
     );
+    render_machine_strip(buffer, workspace_area, config, state, hits);
 
-    let empty_collapsed_groups = HashSet::new();
-
-    enum Row {
-        Endpoint(usize),
-        Workspace {
-            endpoint: usize,
-            entry: WorkspaceEntry,
-        },
-    }
-    let mut rows = Vec::new();
-    for (endpoint_index, endpoint) in state.endpoints.iter().enumerate() {
-        rows.push(Row::Endpoint(endpoint_index));
-        if state.collapsed_endpoints.contains(&endpoint.endpoint_id) {
-            continue;
-        }
-        if let Some(snapshot) = endpoint.snapshot.as_deref() {
-            let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
-                .unwrap_or(&empty_collapsed_groups);
-            rows.extend(
-                super::sidebar::workspace_entries(snapshot, collapsed_groups)
-                    .into_iter()
-                    .map(|entry| Row::Workspace {
-                        endpoint: endpoint_index,
-                        entry,
-                    }),
-            );
-        }
-    }
+    // One merged list of spaces; the same custom name on several machines is one row.
+    let spaces = super::linked_spaces::linked_spaces(
+        state.endpoints,
+        state.collapsed_endpoints,
+        state.collapsed_groups,
+        state.remote_collapsed_groups,
+    );
     let body = Rect::new(
         workspace_area.x,
         workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
@@ -297,96 +277,70 @@ pub(super) fn render_expanded(
             .saturating_sub(WORKSPACE_HEADER_ROWS + 1),
     );
     hits.workspace_body = body;
-    // Same worktree-group padding rule as the local Spaces panel: a group is padded as one
-    // block. Endpoint header rows are never padded.
-    let paddings = rows
+    let active = state.active_endpoint_id;
+    let paddings = spaces
         .iter()
         .enumerate()
-        .map(|(index, row)| match row {
-            Row::Endpoint(_) => (0, 0),
-            Row::Workspace { entry, .. } => super::sidebar::space_entry_padding(
-                entry.indented,
-                matches!(
-                    rows.get(index + 1),
-                    Some(Row::Workspace { entry: next, .. }) if next.indented
-                ),
+        .map(|(index, space)| {
+            let part = &space.parts[space.primary_part_index(active)];
+            let next_indented = spaces
+                .get(index + 1)
+                .is_some_and(|next| next.parts[next.primary_part_index(active)].entry.indented);
+            super::sidebar::space_entry_padding(
+                part.entry.indented,
+                next_indented,
                 config.spaces.row_padding,
-            ),
+            )
         })
         .collect::<Vec<_>>();
-    let row_heights = rows
+    let row_heights = spaces
         .iter()
         .zip(&paddings)
-        .map(|(row, (top, bottom))| match row {
-            Row::Endpoint(_) => 1,
-            Row::Workspace { endpoint, entry } => {
-                let endpoint = &state.endpoints[*endpoint];
-                let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
-                    .unwrap_or(&empty_collapsed_groups);
-                endpoint
-                    .snapshot
-                    .as_deref()
-                    .and_then(|snapshot| {
-                        let workspace = snapshot.workspaces.get(entry.index)?;
-                        Some(
-                            super::sidebar::workspace_rows(
-                                workspace,
-                                super::sidebar::displayed_workspace_status(
-                                    snapshot,
-                                    workspace,
-                                    collapsed_groups,
-                                ),
-                                entry.indented,
-                                &config.spaces,
-                            )
-                            .len()
-                            .max(1)
-                            .min(u16::MAX as usize) as u16,
-                        )
-                    })
-                    .unwrap_or(1)
-                    .saturating_add(*top)
-                    .saturating_add(*bottom)
-            }
+        .map(|(space, (top, bottom))| {
+            let part = &space.parts[space.primary_part_index(active)];
+            (super::sidebar::workspace_rows(
+                part.workspace,
+                space.worst_status(),
+                part.entry.indented,
+                &config.spaces,
+            )
+            .len()
+            .max(1)
+            .min(u16::MAX as usize) as u16)
+                .saturating_add(*top)
+                .saturating_add(*bottom)
         })
         .collect::<Vec<_>>();
-    // `ui.sidebar.spaces.row_gap` follows the local Spaces rule: a gap before every top-level
-    // row, none inside a worktree group. An endpoint header stays attached to its first
-    // workspace, and the next header is separated from the previous machine's rows.
-    let gaps = rows
+    let gaps = spaces
         .iter()
         .enumerate()
-        .map(|(index, row)| match (row, rows.get(index + 1)) {
-            (_, None) | (Row::Endpoint(_), _) => 0,
-            (_, Some(Row::Workspace { entry, .. })) if entry.indented => 0,
-            _ => config.spaces.row_gap,
+        .map(|(index, _)| {
+            spaces.get(index + 1).map_or(0, |next| {
+                u16::from(!next.parts[next.primary_part_index(active)].entry.indented)
+                    * config.spaces.row_gap
+            })
         })
         .collect::<Vec<_>>();
     let reveal_navigation = !body.is_empty() && std::mem::take(state.reveal_navigation_workspace);
     let reveal_focus = !body.is_empty() && std::mem::take(state.reveal_focused_workspace);
     if reveal_navigation || reveal_focus {
-        let selected_row = rows.iter().position(|row| match row {
-            Row::Workspace { endpoint, entry } => {
-                let endpoint = &state.endpoints[*endpoint];
-                endpoint
-                    .snapshot
-                    .as_deref()
-                    .and_then(|snapshot| snapshot.workspaces.get(entry.index))
-                    .is_some_and(|workspace| {
-                        if reveal_navigation {
-                            state.selected_workspace_id.is_some_and(|target| {
-                                target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
-                            })
-                        } else {
-                            &endpoint.endpoint_id == state.active_endpoint_id
-                                && active_snapshot.is_some_and(|snapshot| {
-                                    snapshot.focused_workspace_id.as_deref()
-                                        == Some(workspace.workspace_id.as_str())
-                                })
-                        }
-                    })
+        let selected_row = spaces.iter().position(|space| {
+            if reveal_navigation {
+                state.selected_workspace_id.is_some_and(|target| {
+                    space
+                        .parts
+                        .iter()
+                        .any(|part| target.matches(part.endpoint_id, &part.workspace.workspace_id))
+                })
+            } else {
+                space.parts.iter().any(|part| {
+                    part.endpoint_id == state.active_endpoint_id
+                        && active_snapshot.is_some_and(|snapshot| {
+                            snapshot.focused_workspace_id.as_deref()
+                                == Some(part.workspace.workspace_id.as_str())
+                        })
+                })
             }
-            Row::Endpoint(_) => false,
         });
         if let Some(selected_row) = selected_row {
             *state.workspace_scroll = super::scroll::list_scroll_start_to_reveal(
@@ -411,129 +365,85 @@ pub(super) fn render_expanded(
         .saturating_sub(metrics.offset_from_bottom);
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
+    let empty_groups = HashSet::new();
     let mut y = body.y;
-    for (row_index, row) in rows.iter().enumerate().skip(*state.workspace_scroll) {
-        match row {
-            Row::Endpoint(index) => {
-                if y >= body.bottom() {
-                    break;
-                }
-                let endpoint = &state.endpoints[*index];
-                let rect = Rect::new(body.x, y, content_width, 1);
-                let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
-                let marker = if collapsed { "▶" } else { "▼" };
-                render_endpoint_row(
-                    buffer,
-                    rect,
-                    marker,
-                    endpoint,
-                    (collapsed && &endpoint.endpoint_id == state.active_endpoint_id)
-                        .then_some(body.right()),
-                    palette,
-                );
-                hits.machines.push(MachineHit {
-                    rect,
-                    collapse_toggle: Rect::new(
-                        rect.x.saturating_add(1),
-                        rect.y,
-                        u16::from(rect.width > 1),
-                        1,
-                    ),
-                    endpoint_id: endpoint.endpoint_id.clone(),
+    for (row_index, space) in spaces.iter().enumerate().skip(*state.workspace_scroll) {
+        let part = &space.parts[space.primary_part_index(active)];
+        let status = space.worst_status();
+        let mut rows = super::sidebar::workspace_rows(
+            part.workspace,
+            status,
+            part.entry.indented,
+            &config.spaces,
+        );
+        let marks = space.machine_marks();
+        if !marks.is_empty() {
+            if let Some(first) = rows.first_mut() {
+                first.push(crate::ui::ResolvedToken {
+                    kind: crate::ui::ResolvedTokenKind::Machine(marks),
+                    style: crate::config::SidebarTokenStyle::default(),
                 });
-                y = y
-                    .saturating_add(1)
-                    .saturating_add(gaps.get(row_index).copied().unwrap_or(0));
-            }
-            Row::Workspace { endpoint, entry } => {
-                let endpoint = &state.endpoints[*endpoint];
-                let Some(snapshot) = endpoint.snapshot.as_deref() else {
-                    continue;
-                };
-                let Some(workspace) = snapshot.workspaces.get(entry.index) else {
-                    continue;
-                };
-                let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
-                    .unwrap_or(&empty_collapsed_groups);
-                let status = super::sidebar::displayed_workspace_status(
-                    snapshot,
-                    workspace,
-                    collapsed_groups,
-                );
-                let tokens = super::sidebar::workspace_rows(
-                    workspace,
-                    status,
-                    entry.indented,
-                    &config.spaces,
-                );
-                let height = row_heights[row_index].min(body.height);
-                if y.saturating_add(height) > body.bottom() {
-                    break;
-                }
-                let rect = Rect::new(body.x, y, content_width, height);
-                let nested = Rect::new(
-                    rect.x.saturating_add(2),
-                    rect.y,
-                    rect.width.saturating_sub(2),
-                    rect.height,
-                );
-                let endpoint_active = &endpoint.endpoint_id == state.active_endpoint_id;
-                let selected = state.selected_workspace_id.is_some_and(|target| {
-                    target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
-                });
-                if endpoint_active && workspace.focused {
-                    // Padding rows carry the highlight; content rows are repainted below.
-                    super::render::highlight_sidebar_row(
-                        buffer,
-                        nested,
-                        body.right(),
-                        palette.active_row_bg,
-                    );
-                }
-                super::sidebar::render_workspace_rows(
-                    buffer,
-                    super::sidebar::padded_content_rect(nested, paddings[row_index]),
-                    workspace,
-                    status,
-                    config.status_indicators,
-                    entry,
-                    tokens,
-                    endpoint_active,
-                    selected,
-                    false,
-                    palette,
-                );
-                if selected && palette.selection_bg == ratatui::style::Color::Reset {
-                    buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
-                }
-                if endpoint.status != ClientEndpointStatus::Online {
-                    buffer.set_style(
-                        rect,
-                        Style::default()
-                            .fg(palette.overlay0)
-                            .add_modifier(Modifier::DIM),
-                    );
-                }
-                let group_toggle = super::sidebar::render_parent_group_toggle(
-                    buffer,
-                    rect,
-                    snapshot,
-                    entry.index,
-                    collapsed_groups,
-                    palette,
-                );
-                hits.workspaces.push(WorkspaceHit {
-                    rect,
-                    endpoint_id: endpoint.endpoint_id.clone(),
-                    workspace_id: workspace.workspace_id.clone(),
-                    indented: entry.indented,
-                    group_toggle,
-                });
-                y = y
-                    .saturating_add(height)
-                    .saturating_add(gaps.get(row_index).copied().unwrap_or(0));
             }
         }
+        let height = row_heights[row_index].min(body.height);
+        if y.saturating_add(height) > body.bottom() {
+            break;
+        }
+        let rect = Rect::new(body.x, y, content_width, height);
+        let endpoint_active = part.endpoint_id == state.active_endpoint_id;
+        let selected = state.selected_workspace_id.is_some_and(|target| {
+            space.parts.iter().any(|candidate| {
+                target.matches(candidate.endpoint_id, &candidate.workspace.workspace_id)
+            })
+        });
+        if endpoint_active && part.workspace.focused {
+            // Padding rows carry the highlight; content rows are repainted below.
+            super::render::highlight_sidebar_row(buffer, rect, body.right(), palette.active_row_bg);
+        }
+        super::sidebar::render_workspace_rows(
+            buffer,
+            super::sidebar::padded_content_rect(rect, paddings[row_index]),
+            part.workspace,
+            status,
+            config.status_indicators,
+            &part.entry,
+            rows,
+            endpoint_active,
+            selected,
+            false,
+            palette,
+        );
+        if selected && palette.selection_bg == ratatui::style::Color::Reset {
+            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+        }
+        if !part.online {
+            buffer.set_style(
+                rect,
+                Style::default()
+                    .fg(palette.overlay0)
+                    .add_modifier(Modifier::DIM),
+            );
+        }
+        let collapsed_groups =
+            collapsed_groups_for_endpoint(state, part.endpoint_id).unwrap_or(&empty_groups);
+        let group_toggle = super::sidebar::render_parent_group_toggle(
+            buffer,
+            rect,
+            part.snapshot,
+            part.workspace_index,
+            collapsed_groups,
+            palette,
+        );
+        hits.workspaces.push(WorkspaceHit {
+            rect,
+            endpoint_id: part.endpoint_id.clone(),
+            workspace_id: part.workspace.workspace_id.clone(),
+            indented: part.entry.indented,
+            group_toggle,
+        });
+        y = y
+            .saturating_add(height)
+            .saturating_add(gaps.get(row_index).copied().unwrap_or(0));
     }
     if show_scrollbar {
         let track = Rect::new(body.right().saturating_sub(1), body.y, 1, body.height);
@@ -606,55 +516,77 @@ pub(super) fn render_expanded(
     );
 }
 
+/// The one-line machine strip above the merged list: `Local ● · oci ●`. Each
+/// name toggles that machine's parts in the list; a hidden machine is dim.
+fn render_machine_strip(
+    buffer: &mut Buffer,
+    workspace_area: Rect,
+    config: &ClientShellConfig,
+    state: &ShellRenderState<'_>,
+    hits: &mut ShellHitMap,
+) {
+    if workspace_area.height < 2 {
+        return;
+    }
+    let palette = &config.palette;
+    let y = workspace_area.y.saturating_add(1);
+    let mut x = workspace_area.x.saturating_add(1);
+    for (index, endpoint) in state.endpoints.iter().enumerate() {
+        let (glyph, _, color) = endpoint_status_presentation(endpoint.status, palette);
+        let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
+        let active = &endpoint.endpoint_id == state.active_endpoint_id;
+        let label = format!("{} {glyph}", endpoint.label);
+        let label_width = display_width(&label);
+        if label_width == 0 || x >= workspace_area.right() {
+            break;
+        }
+        if index > 0 {
+            if workspace_area.right().saturating_sub(x) <= 3 {
+                break;
+            }
+            put_text(
+                buffer,
+                x,
+                y,
+                3,
+                " · ",
+                Style::default().fg(palette.overlay0),
+            );
+            x = x.saturating_add(3);
+        }
+        let width = label_width.min(workspace_area.right().saturating_sub(x));
+        if width == 0 {
+            break;
+        }
+        let rect = Rect::new(x, y, width, 1);
+        if active && collapsed {
+            super::render::highlight_sidebar_row(
+                buffer,
+                rect,
+                workspace_area.right(),
+                palette.active_row_bg,
+            );
+        }
+        let mut style = Style::default().fg(color);
+        if collapsed || endpoint.status == ClientEndpointStatus::Disabled {
+            style = style.add_modifier(Modifier::DIM);
+        } else if active {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        put_text(buffer, x, y, width, &label, style);
+        hits.machines.push(MachineHit {
+            rect,
+            collapse_toggle: rect,
+            endpoint_id: endpoint.endpoint_id.clone(),
+        });
+        x = x.saturating_add(width);
+    }
+}
+
 fn active_endpoint_label<'a>(state: &'a ShellRenderState<'_>) -> &'a str {
     state
         .endpoints
         .iter()
         .find(|endpoint| &endpoint.endpoint_id == state.active_endpoint_id)
         .map_or("Local", |endpoint| endpoint.label.as_str())
-}
-
-fn render_endpoint_row(
-    buffer: &mut Buffer,
-    rect: Rect,
-    marker: &str,
-    endpoint: &ClientShellEndpoint,
-    // The separator column when the row is highlighted.
-    highlight_to: Option<u16>,
-    palette: &Palette,
-) {
-    if let Some(separator_x) = highlight_to {
-        super::render::highlight_sidebar_row(buffer, rect, separator_x, palette.active_row_bg);
-    }
-    let (glyph, state, color) = endpoint_status_presentation(endpoint.status, palette);
-    let state = if endpoint.status == ClientEndpointStatus::Online {
-        ""
-    } else {
-        state
-    };
-    let signal = if endpoint.endpoint_id.is_local() {
-        String::new()
-    } else if state.is_empty() {
-        glyph.to_owned()
-    } else {
-        format!("{glyph} {state}")
-    };
-    let signal_width = display_width(&signal).min(rect.width);
-    put_text(
-        buffer,
-        rect.x,
-        rect.y,
-        rect.width.saturating_sub(signal_width.saturating_add(1)),
-        &format!(" {marker} {}", endpoint.label),
-        Style::default()
-            .fg(
-                if matches!(endpoint.status, ClientEndpointStatus::Disabled) {
-                    palette.overlay0
-                } else {
-                    palette.text
-                },
-            )
-            .add_modifier(Modifier::BOLD),
-    );
-    put_right_text(buffer, rect, rect.y, &signal, Style::default().fg(color));
 }

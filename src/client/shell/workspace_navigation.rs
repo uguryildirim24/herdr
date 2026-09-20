@@ -65,39 +65,65 @@ impl ClientShellState {
         let surface_available = self.snapshot.is_some() && self.pane_surface.is_some();
         let empty_collapsed_groups = HashSet::new();
         let mut targets = Vec::new();
-        for endpoint in &self.endpoints {
-            if endpoint.status != ClientEndpointStatus::Online {
-                continue;
-            }
-            let Some(snapshot) = endpoint.snapshot.as_deref() else {
-                continue;
-            };
-            let entries = if self.sidebar_collapsed && !mobile && surface_available {
-                snapshot
-                    .workspaces
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| WorkspaceEntry {
-                        index,
-                        indented: false,
-                        last_child: false,
-                    })
-                    .collect()
-            } else {
-                let collapsed_groups = if mobile && surface_available {
-                    &empty_collapsed_groups
-                } else {
-                    self.collapsed_groups_for_endpoint(&endpoint.endpoint_id)
-                        .unwrap_or(&empty_collapsed_groups)
+        if mobile || (self.sidebar_collapsed && surface_available) {
+            for endpoint in &self.endpoints {
+                if endpoint.status != ClientEndpointStatus::Online {
+                    continue;
+                }
+                let Some(snapshot) = endpoint.snapshot.as_deref() else {
+                    continue;
                 };
-                render::workspace_entries(snapshot, collapsed_groups)
-            };
-            for entry in entries {
+                let entries = if self.sidebar_collapsed && !mobile && surface_available {
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| WorkspaceEntry {
+                            index,
+                            indented: false,
+                            last_child: false,
+                        })
+                        .collect()
+                } else {
+                    let collapsed_groups = if mobile && surface_available {
+                        &empty_collapsed_groups
+                    } else {
+                        self.collapsed_groups_for_endpoint(&endpoint.endpoint_id)
+                            .unwrap_or(&empty_collapsed_groups)
+                    };
+                    render::workspace_entries(snapshot, collapsed_groups)
+                };
+                for entry in entries {
+                    targets.push(WorkspaceNavigationTarget {
+                        endpoint_id: endpoint.endpoint_id.clone(),
+                        workspace_id: snapshot.workspaces[entry.index].workspace_id.clone(),
+                        boot_id: snapshot.boot_id.clone(),
+                        generation: endpoint.snapshot_generation,
+                    });
+                }
+            }
+        } else {
+            // Desktop expanded sidebar: walk the merged linked rows once.
+            let spaces = super::linked_spaces::linked_spaces(
+                &self.endpoints,
+                &HashSet::new(),
+                &self.collapsed_groups,
+                &self.remote_collapsed_groups,
+            );
+            for space in &spaces {
+                let part = &space.parts[space.primary_part_index(&self.active_endpoint_id)];
+                if !part.online {
+                    continue;
+                }
                 targets.push(WorkspaceNavigationTarget {
-                    endpoint_id: endpoint.endpoint_id.clone(),
-                    workspace_id: snapshot.workspaces[entry.index].workspace_id.clone(),
-                    boot_id: snapshot.boot_id.clone(),
-                    generation: endpoint.snapshot_generation,
+                    endpoint_id: part.endpoint_id.clone(),
+                    workspace_id: part.workspace.workspace_id.clone(),
+                    boot_id: part.snapshot.boot_id.clone(),
+                    generation: self
+                        .endpoints
+                        .iter()
+                        .find(|endpoint| &endpoint.endpoint_id == part.endpoint_id)
+                        .and_then(|endpoint| endpoint.snapshot_generation),
                 });
             }
         }

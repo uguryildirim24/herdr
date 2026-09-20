@@ -343,6 +343,8 @@ pub(super) fn render_shell(
             buffer,
             layout.tab_bar,
             snapshot,
+            state.endpoints,
+            state.active_endpoint_id,
             config,
             state.tab_scroll,
             state.reveal_focused_tab,
@@ -364,6 +366,7 @@ pub(super) fn render_shell(
         hits.tab_scroll_left = Rect::default();
         hits.tab_scroll_right = Rect::default();
         hits.new_tab = Rect::default();
+        hits.remote_tabs.clear();
         hits.pane_splits.clear();
     }
     hits

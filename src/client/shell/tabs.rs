@@ -26,6 +26,8 @@ pub(crate) fn render_tab_bar(
     buffer: &mut Buffer,
     area: Rect,
     snapshot: &ClientShellSnapshot,
+    endpoints: &[ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
@@ -36,15 +38,17 @@ pub(crate) fn render_tab_bar(
     let padding_x = config.tab_bar_padding_x;
     let label_y = area.y.saturating_add(area.height / 2);
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
-    let tabs = snapshot
-        .tabs
+    // A linked space shows every machine's tabs; remote tabs carry the machine mark.
+    let linked = super::linked_spaces::linked_tabs(endpoints, active_endpoint_id);
+    let active_tabs = linked
         .iter()
-        .filter(|tab| Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref())
+        .filter(|entry| entry.active_endpoint)
+        .map(|entry| entry.tab)
         .collect::<Vec<_>>();
-    let desired_widths = tabs
+    let desired_widths = linked
         .iter()
-        .map(|tab| {
-            let label = tab_label(tab);
+        .map(|entry| {
+            let label = linked_tab_label(entry);
             display_width(&label)
                 .saturating_add(padding_x.saturating_mul(2))
                 .max(min_tab_width(padding_x))
@@ -57,7 +61,7 @@ pub(crate) fn render_tab_bar(
         .iter()
         .copied()
         .fold(0_u16, u16::saturating_add)
-        .saturating_add(tabs.len().saturating_sub(1).min(u16::MAX as usize) as u16)
+        .saturating_add(linked.len().saturating_sub(1).min(u16::MAX as usize) as u16)
         .saturating_add(new_tab_width);
     let overflow = desired_total > content.width
         && (!mouse_chrome || content.width >= min_tab_strip_width(padding_x));
@@ -73,7 +77,10 @@ pub(crate) fn render_tab_bar(
     if !overflow {
         *tab_scroll = 0;
     } else if *reveal_focused_tab {
-        if let Some(focused) = tabs.iter().position(|tab| tab.focused) {
+        if let Some(focused) = linked
+            .iter()
+            .position(|entry| entry.active_endpoint && entry.tab.focused)
+        {
             *tab_scroll = centered_tab_scroll(focused, &desired_widths, available).min(max_scroll);
         }
     } else {
@@ -115,8 +122,9 @@ pub(crate) fn render_tab_bar(
 
     let mut first_visible = None;
     let mut last_visible = None;
-    for (index, tab) in tabs.iter().enumerate().skip(*tab_scroll) {
-        let name = tab_label(tab);
+    for (index, entry) in linked.iter().enumerate().skip(*tab_scroll) {
+        let tab = entry.tab;
+        let name = linked_tab_label(entry);
         let desired = desired_widths[index];
         let remaining = tab_right.saturating_sub(x);
         let width = desired.min(remaining);
@@ -124,7 +132,8 @@ pub(crate) fn render_tab_bar(
             break;
         }
         let rect = Rect::new(x, area.y, width, area.height);
-        let style = if tab.focused {
+        let focused = entry.active_endpoint && tab.focused;
+        let style = if focused {
             let base = Style::default()
                 .fg(panel_contrast_fg(palette))
                 .bg(palette.accent);
@@ -148,7 +157,12 @@ pub(crate) fn render_tab_bar(
         );
         fill_rect(buffer, rect, style);
         put_text(buffer, rect.x, label_y, rect.width, &text, style);
-        hits.tabs.push((rect, tab.tab_id.clone()));
+        if entry.active_endpoint {
+            hits.tabs.push((rect, tab.tab_id.clone()));
+        } else {
+            hits.remote_tabs
+                .push((rect, entry.endpoint_id.clone(), tab.tab_id.clone()));
+        }
         first_visible.get_or_insert(index);
         last_visible = Some(index);
         x = x.saturating_add(width + 1);
@@ -219,7 +233,7 @@ pub(crate) fn render_tab_bar(
             Style::default().fg(palette.overlay0),
         );
     }
-    if last_visible.is_some_and(|index| index + 1 < tabs.len()) {
+    if last_visible.is_some_and(|index| index + 1 < linked.len()) {
         let ellipsis_x = if hits.tab_scroll_right.width > 0 {
             hits.tab_scroll_right.x.saturating_sub(1)
         } else {
@@ -236,7 +250,7 @@ pub(crate) fn render_tab_bar(
     }
 
     if let Some(insert_index) = tab_drag_insert_index {
-        if let Some(indicator_x) = tab_drop_indicator_x(hits, &tabs, insert_index) {
+        if let Some(indicator_x) = tab_drop_indicator_x(hits, &active_tabs, insert_index) {
             let indicator_x = indicator_x.min(content.right().saturating_sub(1));
             for y in area.top()..area.bottom() {
                 put_text(
@@ -251,6 +265,15 @@ pub(crate) fn render_tab_bar(
         }
     }
     render_tab_bar_status(buffer, area, snapshot, palette, padding_x, label_y);
+}
+
+/// The label of one merged tab; a remote part's tabs carry the machine initial.
+fn linked_tab_label(entry: &super::linked_spaces::LinkedTab<'_>) -> String {
+    let label = tab_label(entry.tab);
+    match entry.machine_mark {
+        Some(mark) => format!("{mark} {label}"),
+        None => label,
+    }
 }
 
 pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {

@@ -329,6 +329,7 @@ impl ClientShellState {
                 }
             }
             self.hits.tabs.clear();
+            self.hits.remote_tabs.clear();
             self.hits.new_tab = Rect::default();
             self.hits.tab_scroll_left = Rect::default();
             self.hits.tab_scroll_right = Rect::default();

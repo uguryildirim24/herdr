@@ -113,55 +113,80 @@ impl ClientShellState {
             action,
             KeybindAction::PreviousWorkspace | KeybindAction::NextWorkspace
         ) {
-            let workspaces = self
-                .endpoints
-                .iter()
-                .filter(|endpoint| endpoint.status == ClientEndpointStatus::Online)
-                .flat_map(|endpoint| {
-                    endpoint
-                        .snapshot
-                        .as_deref()
-                        .map_or_else(Vec::new, |snapshot| {
-                            render::workspace_entries(snapshot, &HashSet::new())
-                                .into_iter()
-                                .filter_map(|entry| {
-                                    snapshot.workspaces.get(entry.index).map(|workspace| {
-                                        (
-                                            endpoint.endpoint_id.clone(),
-                                            workspace.workspace_id.clone(),
-                                        )
-                                    })
-                                })
-                                .collect()
-                        })
-                })
-                .collect::<Vec<_>>();
-            if workspaces.is_empty() {
+            // Walk the merged rows once: a name on two machines is one step.
+            let spaces = super::linked_spaces::linked_spaces(
+                &self.endpoints,
+                &self.collapsed_endpoints,
+                &self.collapsed_groups,
+                &self.remote_collapsed_groups,
+            );
+            if spaces.is_empty() {
                 return true;
             }
             let focused = self
                 .snapshot
                 .as_deref()
                 .and_then(|snapshot| snapshot.focused_workspace_id.as_deref());
-            let current = workspaces.iter().position(|(endpoint_id, workspace_id)| {
-                endpoint_id == &self.active_endpoint_id && Some(workspace_id.as_str()) == focused
+            let current = spaces.iter().position(|space| {
+                space.parts.iter().any(|part| {
+                    part.endpoint_id == &self.active_endpoint_id
+                        && Some(part.workspace.workspace_id.as_str()) == focused
+                })
             });
             let next = match (current, action) {
                 (Some(index), KeybindAction::PreviousWorkspace) => {
-                    (index + workspaces.len() - 1) % workspaces.len()
+                    (index + spaces.len() - 1) % spaces.len()
                 }
-                (Some(index), KeybindAction::NextWorkspace) => (index + 1) % workspaces.len(),
-                (None, KeybindAction::PreviousWorkspace) => workspaces.len() - 1,
+                (Some(index), KeybindAction::NextWorkspace) => (index + 1) % spaces.len(),
+                (None, KeybindAction::PreviousWorkspace) => spaces.len() - 1,
                 (None, KeybindAction::NextWorkspace) => 0,
                 _ => unreachable!("endpoint workspace navigation"),
             };
-            let (endpoint_id, workspace_id) = workspaces[next].clone();
+            let space = &spaces[next];
+            let part = &space.parts[space.primary_part_index(&self.active_endpoint_id)];
             self.focus_or_activate(
-                endpoint_id,
-                ClientEndpointFocusTarget::Workspace(workspace_id),
+                part.endpoint_id.clone(),
+                ClientEndpointFocusTarget::Workspace(part.workspace.workspace_id.clone()),
                 outcome,
             );
             return true;
+        }
+        if matches!(action, KeybindAction::PreviousTab | KeybindAction::NextTab) {
+            // Walk the merged tab strip of a linked space, crossing machines.
+            let tabs = super::linked_spaces::linked_tabs(&self.endpoints, &self.active_endpoint_id);
+            if tabs.iter().any(|entry| !entry.active_endpoint) {
+                let focused = self
+                    .snapshot
+                    .as_deref()
+                    .and_then(|snapshot| snapshot.focused_tab_id.as_deref());
+                let current = tabs.iter().position(|entry| {
+                    entry.active_endpoint && Some(entry.tab.tab_id.as_str()) == focused
+                });
+                let next = match (current, action) {
+                    (Some(index), KeybindAction::PreviousTab) => {
+                        (index + tabs.len() - 1) % tabs.len()
+                    }
+                    (Some(index), KeybindAction::NextTab) => (index + 1) % tabs.len(),
+                    (None, KeybindAction::PreviousTab) => tabs.len() - 1,
+                    _ => 0,
+                };
+                let entry = &tabs[next];
+                if entry.active_endpoint {
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                            tab_id: entry.tab.tab_id.clone(),
+                        }),
+                        outcome,
+                    );
+                } else {
+                    self.focus_or_activate(
+                        entry.endpoint_id.clone(),
+                        ClientEndpointFocusTarget::Tab(entry.tab.tab_id.clone()),
+                        outcome,
+                    );
+                }
+                return true;
+            }
         }
         if matches!(
             action,
