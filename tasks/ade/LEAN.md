@@ -229,6 +229,15 @@ actually being reviewed.
   they look.
 - **D3.** The box's `herdr-pi doctor` probes with zsh's `whence` through a bash
   login shell, so one row fails on the box; one test scripts only the zsh probe.
+- **D4.** The box's provision script compares remote URLs with a literal string
+  test while the Mac normalizes them, so `…/herdr-ade` and `…/herdr-ade.git` are
+  a `box_clone_url_mismatch`. It broke three lane starts before the URL was made
+  to match by hand. Normalize on both sides, as `remote::same_url` already does.
+- **D5.** `ha harness install` runs the binary that is already installed, so a
+  fix *to the installer itself* only takes effect on the second run after its
+  merge. The box fork build failed twice for this reason. The installer should
+  notice that the binary it just installed is newer than itself and say so, or
+  re-exec.
 
 ---
 
