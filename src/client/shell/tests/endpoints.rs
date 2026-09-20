@@ -4000,3 +4000,62 @@ fn a_coordinator_with_no_lanes_keeps_its_tab_row() {
     );
     assert!(state.hits.remote_tabs.is_empty());
 }
+
+#[test]
+fn overflow_controls_reach_the_last_lane_tab() {
+    let (mut state, remote) = lane_tab_state();
+    let mut remote_snapshot = state
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id == remote)
+        .and_then(|endpoint| endpoint.snapshot.clone())
+        .expect("remote snapshot");
+    for number in 2..=8 {
+        let workspace_id = format!("r_lane_{number}");
+        let tab_id = format!("r_lane_tab_{number}");
+        let pane_id = format!("{workspace_id}:p1");
+        remote_snapshot.workspaces.push(named_workspace(
+            &workspace_id,
+            number,
+            "lane",
+            false,
+            false,
+        ));
+        remote_snapshot.tabs.push(workspace_tab(
+            &workspace_id,
+            &tab_id,
+            1,
+            &format!("lane {number}"),
+            false,
+        ));
+        remote_snapshot
+            .panes
+            .push(workspace_pane(&workspace_id, &tab_id, &pane_id, false));
+        remote_snapshot.agents.push(lane_agent(
+            &pane_id,
+            &workspace_id,
+            &tab_id,
+            Some("Local:ws_1:p1"),
+        ));
+    }
+    state.set_endpoint_snapshot(&remote, remote_snapshot);
+
+    for _ in 0..16 {
+        state.compose(80, 28).expect("overflowing lane row");
+        let right = state.hits.tab_scroll_right;
+        assert!(!right.is_empty(), "lane row should overflow");
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: right.x + 1,
+            row: right.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(outcome.repaint);
+    }
+    state.compose(80, 28).expect("last lane tab");
+    assert!(state
+        .hits
+        .remote_tabs
+        .iter()
+        .any(|(_, _, tab)| tab == "r_lane_tab_8"));
+}
