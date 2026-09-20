@@ -3567,6 +3567,42 @@ fn linked_spaces_draw_one_row_per_name_with_machine_marks() {
 }
 
 #[test]
+fn same_named_spaces_on_one_machine_remain_separate_rows() {
+    let (mut state, _) = linked_space_state();
+    let mut local = state
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id.is_local())
+        .and_then(|endpoint| endpoint.snapshot.clone())
+        .expect("local snapshot");
+    local.workspaces[0].focused = false;
+    local
+        .workspaces
+        .push(named_workspace("ws_4", 4, "Adeherdr", true, true));
+    local.focused_workspace_id = Some("ws_4".into());
+    local.tabs[0].focused = false;
+    local
+        .tabs
+        .push(workspace_tab("ws_4", "tab_4", 1, "duplicate", true));
+    local.focused_tab_id = Some("tab_4".into());
+    state.set_snapshot(local);
+
+    state.compose(100, 28).expect("duplicate local names");
+    let workspace_ids = state
+        .hits
+        .workspaces
+        .iter()
+        .map(|hit| hit.workspace_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(workspace_ids.contains(&"ws_1"), "rows: {workspace_ids:?}");
+    assert!(workspace_ids.contains(&"ws_4"), "rows: {workspace_ids:?}");
+    assert!(
+        state.hits.remote_tabs.is_empty(),
+        "the second local occurrence must not borrow the first remote occurrence"
+    );
+}
+
+#[test]
 fn nameless_default_space_hides_and_returns_with_an_agent() {
     let (mut state, remote) = linked_space_state();
     state.compose(100, 28).expect("hidden default space");

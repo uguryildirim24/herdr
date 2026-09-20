@@ -152,6 +152,12 @@ pub(super) fn linked_tabs<'a>(
     };
     let mut parts = vec![(active_endpoint, active_workspace)];
     if active_workspace.custom_label {
+        let occurrence = active_snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.custom_label && workspace.label == active_workspace.label)
+            .position(|workspace| workspace.workspace_id == active_workspace.workspace_id)
+            .unwrap_or(0);
         for endpoint in endpoints {
             if &endpoint.endpoint_id == active_endpoint_id {
                 continue;
@@ -159,9 +165,14 @@ pub(super) fn linked_tabs<'a>(
             let Some(snapshot) = endpoint.snapshot.as_deref() else {
                 continue;
             };
-            if let Some(workspace) = snapshot.workspaces.iter().find(|workspace| {
-                workspace.custom_label && workspace.label == active_workspace.label
-            }) {
+            if let Some(workspace) = snapshot
+                .workspaces
+                .iter()
+                .filter(|workspace| {
+                    workspace.custom_label && workspace.label == active_workspace.label
+                })
+                .nth(occurrence)
+            {
                 parts.push((endpoint, workspace));
             }
         }
@@ -202,7 +213,7 @@ pub(super) fn linked_spaces<'a>(
 ) -> Vec<LinkedSpace<'a>> {
     let empty = HashSet::new();
     let mut spaces = Vec::<LinkedSpace<'a>>::new();
-    let mut index_by_name = HashMap::<String, usize>::new();
+    let mut indices_by_name = HashMap::<String, Vec<usize>>::new();
     for endpoint in endpoints.iter() {
         if collapsed_endpoints.contains(&endpoint.endpoint_id) {
             continue;
@@ -235,16 +246,27 @@ pub(super) fn linked_spaces<'a>(
                 status,
             };
             let linkable = workspace.custom_label;
-            let existing = linkable
-                .then(|| index_by_name.get(&workspace.label).copied())
-                .flatten();
-            if let Some(index) = existing {
+            let existing = linkable.then(|| {
+                indices_by_name.get(&workspace.label).and_then(|indices| {
+                    indices.iter().copied().find(|index| {
+                        spaces[*index]
+                            .parts
+                            .iter()
+                            .all(|candidate| candidate.endpoint_id != &endpoint.endpoint_id)
+                    })
+                })
+            });
+            if let Some(index) = existing.flatten() {
                 spaces[index].parts.push(part);
             } else {
-                if linkable {
-                    index_by_name.insert(workspace.label.clone(), spaces.len());
-                }
+                let index = spaces.len();
                 spaces.push(LinkedSpace { parts: vec![part] });
+                if linkable {
+                    indices_by_name
+                        .entry(workspace.label.clone())
+                        .or_default()
+                        .push(index);
+                }
             }
         }
     }
