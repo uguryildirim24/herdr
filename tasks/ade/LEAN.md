@@ -321,3 +321,20 @@ verb reaches it. r44 hit `reviewer-start-exhausted` through D7 and then held
 `main` against every later round; the only way forward was editing one field of
 `.state/rounds/r44.toml` by hand, which is the exact move A2 was built to stop.
 A round needs an ending that is a command.
+
+### First live picker observations, 2026-09-20 04:00-04:20Z
+Four real dispatches, all on the Mac:
+
+| Task | difficulty | ambiguity | blast radius | score | min conf | picked |
+|---|---|---|---|---|---|---|
+| Label the project's history (t-0098) | 2.16 (0.80) | 0.96 (0.55) | 0.27 (0.73) | 0.474 | 0.55 | Astra, upgraded |
+| Bound the dispatch payload (t-0099) | — | — | — | 0.636 | 0.47 | Sol, upgraded |
+| Review the case corpus (r47) | 1.96 (0.55) | 1.77 (0.58) | 1.27 (**0.00**) | 0.588 | 0.00 | Astra, upgraded |
+
+Every one of the four was upgraded for low confidence; none was routed on its
+score alone. Either the floor of 0.65 is too high for this kind of work, or the
+questions are not separating it — and the corpus lane's judgement that blast
+radius is the weakest question has its first live support here: on the r47 review
+it returned confidence **0.00**, meaning the probability mass was spread flat
+across all four levels. Do not tune on three rows; run the 90-case corpus through
+Jev once, save the raw answers, and sweep offline.
