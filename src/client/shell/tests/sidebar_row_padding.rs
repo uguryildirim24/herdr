@@ -397,11 +397,11 @@ fn row_gap_applies_to_the_multi_machine_sidebar() {
         .collect::<Vec<_>>();
     assert_eq!(machines.len(), 2);
     assert_eq!(spaces.len(), 4);
-    // Header, space, gap, space, gap, header, space, gap, space.
+    // One machine strip line, then the four merged rows separated by the gap.
+    assert_eq!(machines[0].y, machines[1].y);
     assert_eq!(spaces[0].y, machines[0].bottom());
     assert_eq!(spaces[1].y, spaces[0].bottom() + 1);
-    assert_eq!(machines[1].y, spaces[1].bottom() + 1);
-    assert_eq!(spaces[2].y, machines[1].bottom());
+    assert_eq!(spaces[2].y, spaces[1].bottom() + 1);
     assert_eq!(spaces[3].y, spaces[2].bottom() + 1);
 
     // Gap rows count toward the scroll range: 3 gaps more content than without gaps.

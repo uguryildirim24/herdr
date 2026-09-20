@@ -1353,6 +1353,9 @@ impl ClientShellState {
                 return;
             }
             if let Some(press) = self.tab_press.as_ref() {
+                if press.endpoint_id != self.active_endpoint_id {
+                    return;
+                }
                 let delta = mouse
                     .column
                     .abs_diff(press.start_column)
@@ -1512,12 +1515,20 @@ impl ClientShellState {
                 return;
             }
             if let Some(press) = self.tab_press.take() {
-                self.push_endpoint_method(
-                    crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                        tab_id: press.tab_id,
-                    }),
-                    outcome,
-                );
+                if press.endpoint_id == self.active_endpoint_id {
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                            tab_id: press.tab_id,
+                        }),
+                        outcome,
+                    );
+                } else {
+                    self.focus_or_activate(
+                        press.endpoint_id,
+                        ClientEndpointFocusTarget::Tab(press.tab_id),
+                        outcome,
+                    );
+                }
                 return;
             }
         }
@@ -2292,6 +2303,27 @@ impl ClientShellState {
                     self.workspace_press = Some(workspace_press);
                     return;
                 }
+                let remote_tab_press = self
+                    .config
+                    .mouse_capture
+                    .then(|| {
+                        self.hits
+                            .remote_tabs
+                            .iter()
+                            .find(|(rect, _, _)| super::contains(*rect, point))
+                            .map(|(_, endpoint_id, tab_id)| ClientTabPress {
+                                endpoint_id: endpoint_id.clone(),
+                                tab_id: tab_id.clone(),
+                                workspace_id: String::new(),
+                                start_column: mouse.column,
+                                start_row: mouse.row,
+                            })
+                    })
+                    .flatten();
+                if let Some(tab_press) = remote_tab_press {
+                    self.tab_press = Some(tab_press);
+                    return;
+                }
                 let tab_press = self
                     .config
                     .mouse_capture
@@ -2308,6 +2340,7 @@ impl ClientShellState {
                                     .iter()
                                     .find(|tab| tab.tab_id == *tab_id)?;
                                 Some(ClientTabPress {
+                                    endpoint_id: self.active_endpoint_id.clone(),
                                     tab_id: tab.tab_id.clone(),
                                     workspace_id: tab.workspace_id.clone(),
                                     start_column: mouse.column,
