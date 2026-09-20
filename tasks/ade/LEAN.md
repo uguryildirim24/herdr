@@ -169,6 +169,18 @@ knows every one of those versions.
 **Should be:** the screen says *this window is older than the program* and names
 what to restart. Nobody should discover staleness by being confused.
 
+### U6. A lane's tab is not next to its coordinator's tabs
+Rolf, 2026-09-20: "the tasks are showing under your session list in the agents
+pane but not next to your tabs." The agents panel nests a box lane under its
+coordinator correctly. The tab bar does not: a box lane opens its own workspace
+on the box, so its tab is somewhere else entirely, and the coordinator's tab row
+does not show the work it started.
+
+Round r31 merged a merged tab bar for a *linked space* — a space with the same
+custom name on two machines. A lane's workspace is not that. Decide what the
+right thing is: the lane's tab joining the coordinator's row, a lane section in
+that row, or lanes not getting a workspace of their own on the box at all.
+
 ### U5. The task list is not on the screen
 `TASKS.md` is the list of what Rolf wants done. Today it exists only inside the
 coordinator's digest, so the one place he looks does not show it. Rolf,
@@ -182,6 +194,21 @@ what is on the list without asking.
 ---
 
 ## M — Model choice, from Rolf, 2026-09-20
+
+**Mechanism, not policy.** Rolf, at the end of the night: *"I genuinely think my
+idea on where to put Jev or how to make the classifier work efficiently might not
+be the best... I just want the infra to be built so we can easily implement. I
+know that when you dispatch it should just route in the background, but I don't
+know what it should implement."*
+
+So the routing plumbing is the deliverable and the classification policy is a
+thing we tune. The questions, their criteria, the model descriptions, the
+thresholds and the exclusions live in an editable file, not in Rust. Changing a
+weight or a rubric must not need a rebuild, and there must be a way to measure
+whether a change made it better. A research lane (t-0083) is answering how to
+pose the question; its findings replace whatever the first implementation
+guesses.
+
 
 This reverses the decision of 2026-09-19 13:40 ("no Jev picker, we don't need
 the classifier"). Rolf, tonight:
