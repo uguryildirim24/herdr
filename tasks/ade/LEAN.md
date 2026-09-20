@@ -300,3 +300,24 @@ every build directory is named in the ignores. `target` and `.target` were there
 every choice made for Rolf this project — twenty-three of them — is logged
 `routine`, including ones that changed what he gets. The refusal is right; the
 thing it points at does not exist.
+
+### D7. Dispatch sends an unbounded payload, and hides what the server said
+2026-09-20 03:50Z, round r44. `start_reviewer` appends the whole committed review
+brief and the full diff of every pinned member into the reviewer's **task**, and
+that same task is the dispatch state. The r44 lane committed a 582 KB JSON case
+file and a 150 KB report, so the task was about 750 KB. TypeSafe answers a body
+that size with HTTP 400, and `--fail` turned that into `jev_transport: request
+failed (exit Some(56))` — curl's exit code and nothing else. Reproduced exactly
+against the live endpoint; a small body with the same key returns 200 in 0.34 s.
+
+Two defects. Nothing bounds the state, so a lane that commits a large generated
+file makes its own review undispatchable *and* would prime its reviewer with
+750 KB of prompt. And the error throws away the status and the server's message,
+so a refusal reads as a transport fault.
+
+### D8. A round that cannot proceed has no way out
+`RoundPhase::Abandoned` exists and the head-reservation check honours it, but no
+verb reaches it. r44 hit `reviewer-start-exhausted` through D7 and then held
+`main` against every later round; the only way forward was editing one field of
+`.state/rounds/r44.toml` by hand, which is the exact move A2 was built to stop.
+A round needs an ending that is a command.
