@@ -153,8 +153,14 @@ impl ClientShellState {
         }
         if matches!(action, KeybindAction::PreviousTab | KeybindAction::NextTab) {
             // Walk the merged tab strip of a linked space, crossing machines.
-            let tabs = super::linked_spaces::linked_tabs(&self.endpoints, &self.active_endpoint_id);
-            if tabs.iter().any(|entry| !entry.active_endpoint) {
+            let tabs = super::linked_spaces::linked_tabs(
+                &self.endpoints,
+                &self.active_endpoint_id,
+                self.config.agent_parent_nesting,
+            );
+            if tabs.iter().any(|entry| !entry.active_endpoint)
+                || tabs.len() > self.focused_tab_count()
+            {
                 let focused = self
                     .snapshot
                     .as_deref()

@@ -3768,3 +3768,235 @@ fn workspace_picker_walks_linked_rows_once() {
     assert_eq!(walked, vec!["ws_2", "ws_3", "ws_1"]);
     let _ = remote;
 }
+
+/// An agent with an explicit workspace/tab, for the lane-row tests. `nested_agent` hardcodes
+/// `ws_1`/`tab_1`, which cannot describe a lane in its own workspace.
+fn lane_agent(
+    pane_id: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    parent: Option<&str>,
+) -> ClientShellAgent {
+    ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: workspace_id.into(),
+        tab_id: tab_id.into(),
+        name: Some(pane_id.into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Idle,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: parent
+            .map(|parent| vec![("parent".to_string(), parent.to_string())])
+            .unwrap_or_default(),
+        focused: false,
+    }
+}
+
+/// Local coordinator `ws_1` with two tabs; a box lane in its own `r_lane` workspace whose
+/// agent's `parent` token names the local coordinator pane.
+fn lane_tab_state() -> (ClientShellState, ClientEndpointId) {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.agent_parent_nesting = true;
+    let mut state = ClientShellState::new(config);
+    let mut profile = remote_profile();
+    profile.label = "oci".into();
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    local.workspaces = vec![named_workspace("ws_1", 1, "adeherdr", true, true)];
+    local.focused_workspace_id = Some("ws_1".into());
+    local.focused_tab_id = Some("tab_1".into());
+    local.focused_pane_id = Some("ws_1:p1".into());
+    local.tabs = vec![
+        workspace_tab("ws_1", "tab_1", 1, "1", true),
+        workspace_tab("ws_1", "tab_2", 2, "2", false),
+    ];
+    local.panes = vec![workspace_pane("ws_1", "tab_1", "ws_1:p1", true)];
+    local.agents = vec![lane_agent("ws_1:p1", "ws_1", "tab_1", None)];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+
+    let mut remote_snapshot = snapshot();
+    remote_snapshot.boot_id = "remote-boot".into();
+    remote_snapshot.workspaces = vec![named_workspace("r_lane", 1, "lane", false, true)];
+    remote_snapshot.focused_workspace_id = Some("r_lane".into());
+    remote_snapshot.focused_tab_id = Some("r_lane_tab".into());
+    remote_snapshot.focused_pane_id = Some("r_lane:p1".into());
+    remote_snapshot.tabs = vec![workspace_tab("r_lane", "r_lane_tab", 1, "lane", true)];
+    remote_snapshot.panes = vec![workspace_pane("r_lane", "r_lane_tab", "r_lane:p1", true)];
+    remote_snapshot.agents = vec![lane_agent(
+        "r_lane:p1",
+        "r_lane",
+        "r_lane_tab",
+        Some("Local:ws_1:p1"),
+    )];
+    state.set_endpoint_snapshot(&remote, Box::new(remote_snapshot));
+    (state, remote)
+}
+
+#[test]
+fn lane_tab_on_another_machine_joins_its_coordinators_row() {
+    let (mut state, remote) = lane_tab_state();
+    let frame = state.compose(100, 28).expect("lane row");
+    // The coordinator owns the row; the lane tab joins it, not its own workspace row.
+    assert_eq!(
+        state
+            .hits
+            .tabs
+            .iter()
+            .map(|(_, tab)| tab.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tab_1", "tab_2"]
+    );
+    let (rect, endpoint_id, tab_id) = state
+        .hits
+        .remote_tabs
+        .iter()
+        .find(|(_, _, tab)| tab.as_str() == "r_lane_tab")
+        .cloned()
+        .expect("lane tab");
+    assert_eq!(endpoint_id, remote);
+    assert_eq!(tab_id, "r_lane_tab");
+    assert_eq!(
+        state
+            .hits
+            .remote_tabs
+            .iter()
+            .filter(|(_, _, tab)| tab.as_str() == "r_lane_tab")
+            .count(),
+        1,
+        "the lane tab joins the row once"
+    );
+    let coordinator_right = state
+        .hits
+        .tabs
+        .iter()
+        .map(|(rect, _)| rect.right())
+        .max()
+        .expect("coordinator tabs");
+    assert!(
+        rect.x >= coordinator_right,
+        "the lane tab follows the coordinator's tabs"
+    );
+    // The remote tab carries the machine initial.
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    let row = (rect.x..rect.right())
+        .map(|x| buffer[(x, rect.y)].symbol())
+        .collect::<String>();
+    assert!(row.contains('o'), "tab: {row:?}");
+}
+
+#[test]
+fn choosing_a_lane_tab_activates_its_endpoint() {
+    let (mut state, remote) = lane_tab_state();
+    state.compose(100, 28).expect("lane row");
+    let (rect, endpoint_id, tab_id) = state
+        .hits
+        .remote_tabs
+        .iter()
+        .find(|(_, _, tab)| tab.as_str() == "r_lane_tab")
+        .cloned()
+        .expect("lane tab");
+    assert_eq!(endpoint_id, remote);
+
+    let outcome = state.handle_raw_events(vec![
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        }),
+    ]);
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id: activated,
+            target: Some(ClientEndpointFocusTarget::Tab(focused)),
+        }] if activated == &remote && focused == &tab_id
+    ));
+}
+
+#[test]
+fn keyboard_tab_navigation_walks_the_lane_row_once() {
+    let (mut state, remote) = lane_tab_state();
+    state.compose(100, 28).expect("lane row");
+
+    // tab_1 -> tab_2 inside the coordinator.
+    let mut outcome = ClientShellInput::default();
+    assert!(state.handle_endpoint_navigation(crate::input::KeybindAction::NextTab, &mut outcome));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::Endpoint { endpoint_id, request, .. }]
+            if endpoint_id == &ClientEndpointId::Local
+                && matches!(&request.method, crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2")
+    ));
+
+    // tab_2 -> the lane tab, activating the other machine.
+    if let Some(snapshot) = state.snapshot.as_deref_mut() {
+        snapshot.focused_tab_id = Some("tab_2".into());
+    }
+    let mut outcome = ClientShellInput::default();
+    assert!(state.handle_endpoint_navigation(crate::input::KeybindAction::NextTab, &mut outcome));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Tab(tab)),
+        }] if endpoint_id == &remote && tab == "r_lane_tab"
+    ));
+
+    // Inside the lane the row is still the coordinator's, so the walk steps back to tab_2.
+    assert!(state.activate_endpoint_projection(&remote));
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+    state.compose(100, 28).expect("lane focused");
+    let mut outcome = ClientShellInput::default();
+    assert!(
+        state.handle_endpoint_navigation(crate::input::KeybindAction::PreviousTab, &mut outcome)
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Tab(tab)),
+        }] if endpoint_id == &ClientEndpointId::Local && tab == "tab_2"
+    ));
+}
+
+#[test]
+fn a_coordinator_with_no_lanes_keeps_its_tab_row() {
+    let (mut state, remote) = lane_tab_state();
+    let mut remote_snapshot = state
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id == remote)
+        .and_then(|endpoint| endpoint.snapshot.clone())
+        .expect("remote snapshot");
+    remote_snapshot.agents.clear();
+    state.set_endpoint_snapshot(&remote, remote_snapshot);
+    state.compose(100, 28).expect("no lanes");
+    assert_eq!(
+        state
+            .hits
+            .tabs
+            .iter()
+            .map(|(_, tab)| tab.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tab_1", "tab_2"]
+    );
+    assert!(state.hits.remote_tabs.is_empty());
+}

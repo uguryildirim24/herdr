@@ -124,42 +124,172 @@ pub(super) struct LinkedTab<'a> {
     pub(super) active_endpoint: bool,
 }
 
-/// Tabs of every part of the active space, active endpoint first. When the
-/// focused workspace has no custom name the active endpoint's own tabs are all
-/// that can link, so the strip is unchanged.
+/// The active endpoint's focused workspace, the plain case for the tab row.
+fn focused_workspace<'a>(
+    endpoints: &'a [ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
+) -> Option<(&'a ClientShellEndpoint, &'a ClientShellWorkspace)> {
+    let endpoint = endpoints
+        .iter()
+        .find(|endpoint| &endpoint.endpoint_id == active_endpoint_id)?;
+    let snapshot = endpoint.snapshot.as_deref()?;
+    let focused_id = snapshot.focused_workspace_id.as_deref()?;
+    let workspace = snapshot
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace_id == focused_id)?;
+    Some((endpoint, workspace))
+}
+
+/// Resolve the endpoint a `parent` token's machine label names. A bare token stays on
+/// `own`; an ambiguous label resolves to nothing, the way the agent tree refuses to guess.
+fn parent_endpoint<'a>(
+    endpoints: &'a [ClientShellEndpoint],
+    own: &'a ClientShellEndpoint,
+    label: Option<&str>,
+) -> Option<&'a ClientShellEndpoint> {
+    match label {
+        None => Some(own),
+        Some(label) => {
+            let mut matches = endpoints.iter().filter(|endpoint| endpoint.label == label);
+            let first = matches.next()?;
+            matches.next().is_none().then_some(first)
+        }
+    }
+}
+
+/// The workspace whose tab row the bar draws. Normally that is the focused workspace; a lane
+/// hangs under a coordinator, so entering one keeps its coordinator's row and the next/previous
+/// tab walk can cross the whole row instead of stranding on the lane.
+fn tab_anchor<'a>(
+    endpoints: &'a [ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
+) -> Option<(&'a ClientShellEndpoint, &'a ClientShellWorkspace)> {
+    let (endpoint, focused) = focused_workspace(endpoints, active_endpoint_id)?;
+    let snapshot = endpoint.snapshot.as_deref()?;
+    for agent in snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.workspace_id == focused.workspace_id)
+    {
+        let Some(token) = super::agent_tree::parent_token(agent) else {
+            continue;
+        };
+        let Some((label, pane_id)) = super::aggregate_navigation::split_machine_parent(token)
+        else {
+            continue;
+        };
+        let Some(parent_endpoint) = parent_endpoint(endpoints, endpoint, label) else {
+            continue;
+        };
+        let Some(parent_snapshot) = parent_endpoint.snapshot.as_deref() else {
+            continue;
+        };
+        let Some(parent_workspace) = parent_snapshot.workspaces.iter().find(|workspace| {
+            parent_snapshot
+                .panes
+                .iter()
+                .any(|pane| pane.workspace_id == workspace.workspace_id && pane.pane_id == pane_id)
+        }) else {
+            continue;
+        };
+        // A parent in the same workspace is not a lane, so the focused workspace stays the row.
+        if parent_endpoint.endpoint_id == endpoint.endpoint_id
+            && parent_workspace.workspace_id == focused.workspace_id
+        {
+            continue;
+        }
+        return Some((parent_endpoint, parent_workspace));
+    }
+    Some((endpoint, focused))
+}
+
+/// Workspaces whose agents hang under a pane of the anchor workspace, on any endpoint. A lane
+/// runs in its own workspace, often on another machine, and its tab belongs in its coordinator's
+/// row even though the workspace name differs.
+fn lane_spaces<'a>(
+    endpoints: &'a [ClientShellEndpoint],
+    anchor_endpoint: &'a ClientShellEndpoint,
+    anchor_workspace: &'a ClientShellWorkspace,
+) -> Vec<(&'a ClientShellEndpoint, &'a ClientShellWorkspace)> {
+    let Some(anchor_snapshot) = anchor_endpoint.snapshot.as_deref() else {
+        return Vec::new();
+    };
+    let anchor_panes = anchor_snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.workspace_id == anchor_workspace.workspace_id)
+        .map(|pane| pane.pane_id.as_str())
+        .collect::<HashSet<_>>();
+    if anchor_panes.is_empty() {
+        return Vec::new();
+    }
+    let mut lanes = Vec::new();
+    for endpoint in endpoints {
+        let Some(snapshot) = endpoint.snapshot.as_deref() else {
+            continue;
+        };
+        for workspace in &snapshot.workspaces {
+            if endpoint.endpoint_id == anchor_endpoint.endpoint_id
+                && workspace.workspace_id == anchor_workspace.workspace_id
+            {
+                continue;
+            }
+            let has_lane = snapshot.agents.iter().any(|agent| {
+                if agent.workspace_id != workspace.workspace_id {
+                    return false;
+                }
+                let Some(token) = super::agent_tree::parent_token(agent) else {
+                    return false;
+                };
+                let Some((label, pane_id)) =
+                    super::aggregate_navigation::split_machine_parent(token)
+                else {
+                    return false;
+                };
+                let Some(parent_endpoint) = parent_endpoint(endpoints, endpoint, label) else {
+                    return false;
+                };
+                parent_endpoint.endpoint_id == anchor_endpoint.endpoint_id
+                    && anchor_panes.contains(pane_id)
+            });
+            if has_lane {
+                lanes.push((endpoint, workspace));
+            }
+        }
+    }
+    lanes
+}
+
+/// Tabs of the anchor space, its same-named parts on other machines, and its lanes.
+/// `parent_nesting` is the experimental gate the agent panel uses; with it off the strip is the
+/// focused workspace's own tabs exactly as before.
 pub(super) fn linked_tabs<'a>(
     endpoints: &'a [ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
+    parent_nesting: bool,
 ) -> Vec<LinkedTab<'a>> {
-    let Some(active_endpoint) = endpoints
-        .iter()
-        .find(|endpoint| &endpoint.endpoint_id == active_endpoint_id)
-    else {
+    let anchor = if parent_nesting {
+        tab_anchor(endpoints, active_endpoint_id)
+    } else {
+        focused_workspace(endpoints, active_endpoint_id)
+    };
+    let Some((anchor_endpoint, anchor_workspace)) = anchor else {
         return Vec::new();
     };
-    let Some(active_snapshot) = active_endpoint.snapshot.as_deref() else {
+    let Some(anchor_snapshot) = anchor_endpoint.snapshot.as_deref() else {
         return Vec::new();
     };
-    let Some(focused_id) = active_snapshot.focused_workspace_id.as_deref() else {
-        return Vec::new();
-    };
-    let Some(active_workspace) = active_snapshot
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.workspace_id == focused_id)
-    else {
-        return Vec::new();
-    };
-    let mut parts = vec![(active_endpoint, active_workspace)];
-    if active_workspace.custom_label {
-        let occurrence = active_snapshot
+    let mut parts = vec![(anchor_endpoint, anchor_workspace)];
+    if anchor_workspace.custom_label {
+        let occurrence = anchor_snapshot
             .workspaces
             .iter()
-            .filter(|workspace| workspace.custom_label && workspace.label == active_workspace.label)
-            .position(|workspace| workspace.workspace_id == active_workspace.workspace_id)
+            .filter(|workspace| workspace.custom_label && workspace.label == anchor_workspace.label)
+            .position(|workspace| workspace.workspace_id == anchor_workspace.workspace_id)
             .unwrap_or(0);
         for endpoint in endpoints {
-            if &endpoint.endpoint_id == active_endpoint_id {
+            if endpoint.endpoint_id == anchor_endpoint.endpoint_id {
                 continue;
             }
             let Some(snapshot) = endpoint.snapshot.as_deref() else {
@@ -169,12 +299,23 @@ pub(super) fn linked_tabs<'a>(
                 .workspaces
                 .iter()
                 .filter(|workspace| {
-                    workspace.custom_label && workspace.label == active_workspace.label
+                    workspace.custom_label && workspace.label == anchor_workspace.label
                 })
                 .nth(occurrence)
             {
                 parts.push((endpoint, workspace));
             }
+        }
+    }
+    if parent_nesting {
+        for (endpoint, workspace) in lane_spaces(endpoints, anchor_endpoint, anchor_workspace) {
+            if parts.iter().any(|(part_endpoint, part_workspace)| {
+                part_endpoint.endpoint_id == endpoint.endpoint_id
+                    && part_workspace.workspace_id == workspace.workspace_id
+            }) {
+                continue;
+            }
+            parts.push((endpoint, workspace));
         }
     }
     let mut tabs = Vec::new();

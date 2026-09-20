@@ -39,7 +39,11 @@ pub(crate) fn render_tab_bar(
     let label_y = area.y.saturating_add(area.height / 2);
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
     // A linked space shows every machine's tabs; remote tabs carry the machine mark.
-    let linked = super::linked_spaces::linked_tabs(endpoints, active_endpoint_id);
+    let linked = super::linked_spaces::linked_tabs(
+        endpoints,
+        active_endpoint_id,
+        config.agent_parent_nesting,
+    );
     let active_tabs = linked
         .iter()
         .filter(|entry| entry.active_endpoint)
