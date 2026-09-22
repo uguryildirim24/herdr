@@ -1,7 +1,7 @@
 id = "agy"
-version = "2026.06.24.1"
+version = "2026.09.22.1"
 min_engine_version = 1
-updated_at = "2026-06-24T00:00:00Z"
+updated_at = "2026-09-22T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
 
 [[rules]]
@@ -16,18 +16,52 @@ any = [
   { contains = ["tab amend", "edit command"] },
 ]
 
+# agy 1.2.7 keeps the composer visible while a turn is active. Its queue hint
+# is therefore working evidence even when the spinner frame is between paints.
+[[rules]]
+id = "queued_messages_working"
+state = "working"
+priority = 120
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+contains = ["press up to edit queued messages"]
+
 [[rules]]
 id = "spinner_working"
 state = "working"
-priority = 100
+priority = 110
 region = "whole_recent"
 visible_working = true
-line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
+line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}']
 
 [[rules]]
 id = "background_tasks_working"
 state = "working"
-priority = 90
+priority = 100
 region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+
+# Idle is explicit: an empty composer and its shortcut footer, with no active
+# queue hint. Working rules outrank this while the always-visible composer is
+# shown beneath live output.
+[[rules]]
+id = "empty_prompt_idle"
+state = "idle"
+priority = 50
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+contains = ["? for shortcuts"]
+line_regex = ['^\s*>\s*$']
+not = [
+  { contains = ["press up to edit queued messages"] },
+]
+
+# Do not turn an unrecognized intermediate frame into a completed turn. Only
+# visible working, blocked, or empty-prompt evidence assigns those states.
+[[rules]]
+id = "unrecognized_frame"
+state = "unknown"
+priority = 0
+region = "whole_recent"
+regex = ['(?s).*']

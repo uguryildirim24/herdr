@@ -369,6 +369,53 @@ fn all_bundled_manifests_parse_and_validate() {
 }
 
 #[test]
+fn agy_manifest_distinguishes_live_work_from_an_empty_prompt() {
+    // Bottom-buffer snapshots from agy 1.2.7 with Gemini 3.8 Flash.
+    let spinner = explain(
+        Agent::Antigravity,
+        "╭─ WebSearch ─────────────────────────╮\n│ Searching the web                    │\n╰──────────────────────────────────────╯\n⠋ WebSearch",
+    );
+    assert_eq!(spinner.state, AgentState::Working);
+    assert!(spinner.visible_working);
+    assert_eq!(
+        spinner.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("spinner_working")
+    );
+
+    let queued = explain(
+        Agent::Antigravity,
+        "╭─ WebSearch ─────────────────────────╮\n│ Searching the web                    │\n╰──────────────────────────────────────╯\nPress up to edit queued messages",
+    );
+    assert_eq!(queued.state, AgentState::Working);
+    assert!(queued.visible_working);
+    assert_eq!(
+        queued.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("queued_messages_working")
+    );
+
+    let between_frames = explain(
+        Agent::Antigravity,
+        "╭─ WebSearch ─────────────────────────╮\n│ Searching the web                    │\n╰──────────────────────────────────────╯",
+    );
+    assert_eq!(between_frames.state, AgentState::Unknown);
+    assert_eq!(
+        between_frames.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("unrecognized_frame")
+    );
+
+    let idle = explain(
+        Agent::Antigravity,
+        "Antigravity CLI\n────────────────\n>\n────────────────\n? for shortcuts",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+    assert_eq!(
+        idle.matched_rule.map(|rule| rule.id).as_deref(),
+        Some("empty_prompt_idle")
+    );
+}
+
+#[test]
 fn devin_manifest_detects_idle_working_and_blocked_states() {
     let idle = explain(
         Agent::Devin,
