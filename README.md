@@ -1,5 +1,9 @@
 # herdr
 
+## About this fork
+
+This fork of [upstream Herdr](https://github.com/herdrdev/herdr) adds parent–child agent nesting in the CLI/API and sidebar (including cross-machine trees and saved lineage), agent restart/resume improvements, and detection for additional agent UIs. It remains licensed under the [Apache License 2.0](LICENSE). The installation, docs, and release links below point to upstream.
+
 
 <p align="center">
   <img src="assets/logo.png" alt="herdr" width="100" />
