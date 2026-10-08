@@ -1,0 +1,14 @@
+Herdr fork modifications
+
+This repository contains Rolf's fork of Herdr, the terminal multiplexer
+maintained by the Herdr contributors at https://github.com/herdrdev/herdr.
+Upstream Herdr is licensed under the Apache License, Version 2.0.
+
+Modifications by Rolf, 2026, include parent and child agent lineage in the
+CLI and API, local and cross-machine sidebar trees, persistence of lineage,
+server restart and agent resume changes, additional agent detection, and
+fork documentation. AI coding agents assisted with implementation under
+Rolf's direction.
+
+The upstream LICENSE and third-party license files are retained. This notice
+identifies fork modifications and does not imply upstream endorsement.
