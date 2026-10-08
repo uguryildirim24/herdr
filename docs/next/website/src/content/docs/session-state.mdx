@@ -45,17 +45,6 @@ Default restart after a cargo install is an upgrade: the old server spawns the f
 
 After a successful restart, attached TUI clients disconnect. Re-run `herdr` for the same session. Open CLI waits receive `server_handed_off` and retry once against the new server. `herdr server stop` still ends pane processes.
 
-### First bounce from installed 0.9.0
-
-The first ADE bounce from a running 0.9.0 server uses the old CLI's hidden `live-handoff` subcommand. Later bounces on this tree use `herdr server restart`.
-
-1. Confirm no pane is mid-`agent start`. Save pane tokens if you need them after the bounce. `herdr status --json` should show server 0.9.0 and `live_handoff: true`.
-2. Install with `cargo install --path . --locked --root ~/.local`. Cargo replaces `~/.local/bin/herdr` by rename. Do not copy or truncate onto the running file. Confirm `herdr --version` is the new build and `herdr status --json` still shows server 0.9.0.
-3. From the old CLI, run `herdr server live-handoff` with no flags. Do not pass `--expected-protocol` or `--expected-version`. Do not run `herdr update --handoff`.
-4. Pane processes, public ids, and agent names stay. Tokens and armed waits from 0.9.0 do not. Attached 0.9.0 TUIs exit.
-5. Re-link parents with `herdr agent set-parent`. Re-arm waits. Re-run `herdr` for the TUI.
-6. Later installs on this tree use `herdr server restart` with no `--exec` after the same cargo rename install.
-
 ## Snapshot restore
 
 If the Herdr server stops and starts again, the original pane processes are gone. Herdr restores the saved session shape: workspaces, tabs, panes, cwd, layout, and focus.

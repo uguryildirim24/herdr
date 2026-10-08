@@ -47,17 +47,6 @@ cargo install 之后的默认 restart 是一次升级：旧服务器会 spawn �
 
 成功重启后，已连接的 TUI 客户端会断开。请对同一会话重新运行 `herdr`。打开的 CLI 等待会收到 `server_handed_off`，并针对新服务器重试一次。`herdr server stop` 仍会结束窗格进程。
 
-### 从已安装的 0.9.0 第一次跳转
-
-从正在运行的 0.9.0 服务器做第一次 ADE 跳转时，使用旧 CLI 的隐藏子命令 `live-handoff`。此树上下一次跳转使用 `herdr server restart`。
-
-1. 确认没有窗格正处在 `agent start` 中。如需跳转后使用窗格令牌，先保存它们。`herdr status --json` 应显示服务器 0.9.0 且 `live_handoff: true`。
-2. 用 `cargo install --path . --locked --root ~/.local` 安装。Cargo 通过 rename 替换 `~/.local/bin/herdr`。不要对正在运行的文件做 copy 或 truncate。确认 `herdr --version` 是新构建，且 `herdr status --json` 仍显示服务器 0.9.0。
-3. 从旧 CLI 运行不带标志的 `herdr server live-handoff`。不要传 `--expected-protocol` 或 `--expected-version`。不要运行 `herdr update --handoff`。
-4. 窗格进程、公开 ID 和智能体名称会保留。0.9.0 的令牌和已武装的等待不会保留。已连接的 0.9.0 TUI 会退出。
-5. 用 `herdr agent set-parent` 重新链接父级。重新武装等待。为 TUI 重新运行 `herdr`。
-6. 此树上之后的安装，在同样的 cargo rename 之后使用不带 `--exec` 的 `herdr server restart`。
-
 ## 快照恢复
 
 如果 Herdr 服务器停止后再启动,原来的窗格进程已经不在了。Herdr 会恢复保存的会话形态: 工作区、标签页、窗格、cwd、布局和焦点。

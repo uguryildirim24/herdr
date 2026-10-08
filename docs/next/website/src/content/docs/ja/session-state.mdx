@@ -47,17 +47,6 @@ cargo install 後のデフォルトの restart はアップグレードです。
 
 再起動が成功すると、接続中の TUI クライアントは切断されます。同じセッションで `herdr` を再実行してください。開いていた CLI の wait は `server_handed_off` を受け取り、新しいサーバーへ一度だけ再試行します。`herdr server stop` は今までどおりペインプロセスを終了します。
 
-### インストール済み 0.9.0 からの最初のバウンス
-
-稼働中の 0.9.0 サーバーからの最初の ADE バウンスは、古い CLI の隠しサブコマンド `live-handoff` を使います。このツリー上の以降のバウンスは `herdr server restart` です。
-
-1. どのペインも `agent start` の途中でないことを確認します。バウンス後に必要なペイントークンを保存します。`herdr status --json` はサーバー 0.9.0 と `live_handoff: true` を示す必要があります。
-2. `cargo install --path . --locked --root ~/.local` でインストールします。Cargo は `~/.local/bin/herdr` を rename で置き換えます。稼働中のファイルへコピーや truncate をしないでください。`herdr --version` が新しいビルドであること、`herdr status --json` がまだサーバー 0.9.0 であることを確認します。
-3. 古い CLI からフラグなしで `herdr server live-handoff` を実行します。`--expected-protocol` も `--expected-version` も渡さないでください。`herdr update --handoff` は使わないでください。
-4. ペインプロセス、公開 ID、エージェント名は残ります。0.9.0 のトークンと武装した wait は残りません。接続中の 0.9.0 TUI は終了します。
-5. `herdr agent set-parent` で親を再リンクします。wait を再武装します。TUI のために `herdr` を再実行します。
-6. このツリー上の以降のインストールは、同じ cargo rename のあと、`--exec` なしの `herdr server restart` を使います。
-
 ## スナップショット復元
 
 Herdr サーバーが停止して再起動すると、元のペインのプロセスは失われています。Herdr は保存されたセッションの形を復元します: ワークスペース、タブ、ペイン、cwd、レイアウト、フォーカスです。

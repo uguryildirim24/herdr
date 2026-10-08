@@ -515,7 +515,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: 实时 `herdr server restart` 会保留每个没有 TTL 的窗格和工作区元数据令牌，包括 `parent`。冷停止后再启动只恢复 `[session] restore_tokens` 中的键（默认是 `parent`、`lane`、`round`、`branch`）。从正在运行的 0.9.0 服务器做第一次跳转时令牌仍会丢失，因为 0.9.0 不会捕获它们；请用 `herdr agent set-parent` 重新链接一次。
+**Server restart and persistence**: 实时 `herdr server restart` 会保留每个没有 TTL 的窗格和工作区元数据令牌，包括 `parent`。冷停止后再启动只恢复 `[session] restore_tokens` 中的键（默认是 `parent`、`lane`、`round`、`branch`）。
 
 ## 通知
 

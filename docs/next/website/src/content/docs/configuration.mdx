@@ -526,7 +526,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: A live `herdr server restart` keeps every pane and workspace metadata token that has no TTL, including `parent`. A cold stop then start restores only the keys in `[session] restore_tokens` (default `parent`, `lane`, `round`, `branch`). The first bounce from a running 0.9.0 server still drops tokens, because 0.9.0 does not capture them; re-link once with `herdr agent set-parent`.
+**Server restart and persistence**: A live `herdr server restart` keeps every pane and workspace metadata token that has no TTL, including `parent`. A cold stop then start restores only the keys in `[session] restore_tokens` (default `parent`, `lane`, `round`, `branch`).
 
 ## Notifications
 

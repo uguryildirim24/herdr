@@ -515,7 +515,7 @@ herdr agent set-parent worker --clear
 
 You can also use low-level `herdr pane report-metadata <child_pane_id> --token parent=<parent_pane_id>` or `--clear-token parent`.
 
-**Server restart and persistence**: `herdr server restart`（ライブハンドオフ）では TTL のないペイン／ワークスペースのメタデータトークン（`parent` を含む）が残ります。コールドな停止→起動では `[session] restore_tokens` のキーだけが復元されます（デフォルトは `parent`、`lane`、`round`、`branch`）。稼働中の 0.9.0 サーバーからの最初のバウンスではトークンが落ちます。0.9.0 はトークンをキャプチャしないためです。そのときは一度だけ `herdr agent set-parent` で再リンクしてください。
+**Server restart and persistence**: `herdr server restart`（ライブハンドオフ）では TTL のないペイン／ワークスペースのメタデータトークン（`parent` を含む）が残ります。コールドな停止→起動では `[session] restore_tokens` のキーだけが復元されます（デフォルトは `parent`、`lane`、`round`、`branch`）。
 
 ## 通知
 
